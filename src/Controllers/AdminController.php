@@ -5,6 +5,7 @@ namespace Controllers;
 use Middleware\AccessMiddleware;
 use Core\Request;
 use Backends\MailEngineFactory;
+use Backends\StorageEngineFactory;
 use Views\InvitationView;
 use PDO;
 
@@ -70,7 +71,7 @@ class AdminController
         return;
     }
     
-    public static function deleteItem($db) {
+    public static function deleteItem($config,$db) {
         $itemId = intval($_POST['id']) ?? 0;
         $itemType = trim($_POST['type']) ?? '';
         $userId = $_SESSION['user_id'];
@@ -134,7 +135,7 @@ class AdminController
             }
 
             // Delete the file
-            if (!$storageEngine->remove($filePath)) {
+            if (!$storageEngine->remove($fileInfo['directory_path'] . DIRECTORY_SEPARATOR . $fileInfo['name'])) {
                 error_log("Failed to delete file: $filePath");
                 echo json_encode(['success' => false, 'message' => 'Failed to delete file from storage']);
                 return;
@@ -149,7 +150,7 @@ class AdminController
         }
     }
         
-    public static function createDirectory($db) {
+    public static function createDirectory($config,$db) {
         $cwd = trim($_POST['cwd']) ?? '';
         $cwd = $cwd === '' ? '/' : $cwd;
         $requestedDir = trim($_POST['name']) ?? '';
@@ -229,9 +230,9 @@ class AdminController
     {
         $action = trim($_POST['a']) ?? '';
         if ($action === "createFolder") {
-            self::createDirectory($db);
+            self::createDirectory($config,$db);
         } elseif ($action === "deleteItem") {
-            self::deleteItem($db);
+            self::deleteItem($config,$db);
         } elseif ($action === "invite") {
             self::inviteUser($config,$db);
         }
