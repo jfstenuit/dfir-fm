@@ -6,6 +6,7 @@ use Core\Session;
 use Core\Database;
 use Core\Request;
 use Core\Response;
+use Backends\StorageEngineFactory;
 use Middleware\AccessMiddleware;
 use PDO;
 
@@ -13,95 +14,51 @@ class DownloadController
 {
     public static function handle($config,$db)
     {
-        // Fetch user-specific data from the database (e.g., files)
-        $db = Database::initialize(STORAGE_PATH . '/database/app.sqlite');
         $userId = $_SESSION['user_id'];
 
         // Get the requested path from the query parameter `p`
         $requestedFile = trim($_GET['p']) ?? '';
         $pathParts = pathinfo($requestedFile);
 
-        $access = AccessMiddleware::checkAccess($db, $pathParts['dirname'], $userId);
-        if (!$access) {
-            error_log("Directory does not exist or user doesn't have access");
+        // Check that directory exists
+        $directoryInfo = AccessMiddleware::getDirectoryInfo($db, $pathParts['dirname']);
+        if (!$directoryInfo) {
+            error_log("Directory \"$currentDirectory\" does not exist in DB");
             Response::triggerNotFound();
             return;
         }
 
-        // Verify user has access to the current directory
-        
-        $stmt = $db->prepare("
-SELECT
-    d.id AS directory_id,
-    COALESCE(ar.group_id, 1) AS group_id -- Use admin group ID (1) if group_id is NULL
-FROM
-    directories d
-LEFT JOIN
-    access_rights ar ON ar.directory_id = d.id
-LEFT JOIN
-    user_group ug ON ug.group_id = ar.group_id
-WHERE
-    d.path = :directory_name
-    AND (
-        1 IN (SELECT group_id FROM user_group WHERE user_id = :user_id) -- Check if user is in admin group
-        OR (
-            ar.group_id IN (SELECT group_id FROM user_group WHERE user_id = :user_id)
-            AND ar.can_view = TRUE -- Non-admin group access
-        )
-    )");
-        $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
-        $stmt->bindParam(':directory_name', $pathParts['dirname'], PDO::PARAM_STR);
-        $stmt->execute();
-
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$result) {
+        // Veryfy user has access
+        $accessRights = AccessMiddleware::checkAccess($db, $pathParts['dirname'], $userId);
+        if (! $accessRights['can_read']) {
             error_log("Directory does not exist or user doesn't have access");
             Response::triggerNotFound();
             return;
         }
-
-        $directoryId = $result['directory_id'];
-        $groupId = $result['group_id'];
 
         // Get file details
-        $stmt = $db->prepare("
-SELECT
-    f.*
-FROM
-    files f
-WHERE
-    f.directory_id = :directory_id
-    AND f.name = :file_name");
-        $stmt->bindParam(':directory_id', $directoryId, PDO::PARAM_INT);
-        $stmt->bindParam(':file_name', $pathParts['basename'], PDO::PARAM_STR);
-        $stmt->execute();
-        $fileDetails = $stmt->fetch(PDO::FETCH_ASSOC);
+        $fileDetails = AccessMiddleware::getFileInfo($db, $requestedFile);
         if (!$fileDetails) {
             error_log("File does not exist in this directory");
             Response::triggerNotFound();
             return;
         }
 
-        $baseStorageDir = realpath(__DIR__ . '/../../storage/files');
-        $requestedPath = ltrim($requestedFile, '/');
-        $realFilePath = realpath($baseStorageDir . DIRECTORY_SEPARATOR . $requestedPath);
-        // Check if the resolved path is within the base directory
-        if ($realFilePath === false || strpos($realFilePath, $baseStorageDir) !== 0) {
-            // Invalid path or directory traversal attempt
-            error_log("Invalid path or directory traversal attempt");
-            Response::triggerNotFound();
+        $storageEngine = StorageEngineFactory::create($config);
+        if (!$storageEngine->healthCheck()) {
+            Response::triggerSystemError();
             return;
         }
-        if (!file_exists($realFilePath)) {
+
+        if (!$storageEngine->exists($requestedFile)) {
             // File does not exist
             Response::triggerNotFound();
             exit;
         }
 
         // Fetch the file metadata
-        $filesize = filesize($realFilePath);
-        $filename = basename($realFilePath);
+        $filesize = $storageEngine->getSize($requestedFile);
+        $filename = $pathParts['basename'];
 
         // Set headers for file download
         header('Content-Description: File Transfer');
@@ -142,24 +99,29 @@ WHERE
 
         // Serve the file in chunks
         $chunkSize = 8192; // 8 KB per chunk
-        $handle = fopen($realFilePath, 'rb');
-        if ($handle === false) {
-            Response::triggerSystemError();
-            exit;
-        }
+        $currentOffset = $start;
 
-        // Seek to the start of the requested range
-        fseek($handle, $start);
-
-        // Stream the file
-        while (!feof($handle) && ($pos = ftell($handle)) <= $end) {
-            $bytesToRead = min($chunkSize, $end - $pos + 1);
-            echo fread($handle, $bytesToRead);
+        while ($currentOffset <= $end) {
+            // Calculate the number of bytes to read for the current chunk
+            $bytesToRead = min($chunkSize, $end - $currentOffset + 1);
+        
+            // Read data from the storage engine
+            $chunkData = $storageEngine->readAt($requestedFile, $currentOffset, $bytesToRead);
+        
+            // Check for read failure
+            if ($chunkData === null) {
+                Response::triggerSystemError();
+                exit;
+            }
+        
+            // Output the data to the client
+            echo $chunkData;
             flush(); // Ensure immediate output to the client
+        
+            // Move to the next chunk
+            $currentOffset += $bytesToRead;
         }
 
-        // Close the file handle
-        fclose($handle);
     }
 }
 ?>

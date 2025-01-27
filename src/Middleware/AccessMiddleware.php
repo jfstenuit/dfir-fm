@@ -205,18 +205,53 @@ class AccessMiddleware
         ];
     }
 
-    public static function getDirectoryInfo($db, $directoryPath, $directoryName)
+    public static function getDirectoryInfo($db, $selector)
     {
-        $fullPath = $directoryPath . DIRECTORY_SEPARATOR . $directoryName;
-        $stmt = $db->prepare("
+        $query = "
             SELECT
-                d.*
-            FROM
-                directories d
+                d.*,
+                p.path AS parent_path,
+                (SELECT COUNT(*) FROM directories WHERE parent_id = d.id) AS subdirectory_count,
+                (SELECT COUNT(*) FROM files WHERE directory_id = d.id) AS file_count
+            FROM directories d
+            LEFT JOIN directories p ON d.parent_id = p.id
             WHERE
-                d.path = :directory_name
-        ");
-        $stmt->bindParam(':directory_name', $fullPath, PDO::PARAM_STR);
+        ";
+        if (preg_match('/^\d+$/',$selector)) {
+            $stmt = $db->prepare($query."d.id=:directory_id");
+            $stmt->bindParam(':directory_id', $selector, PDO::PARAM_INT);
+        } else {
+            $stmt = $db->prepare($query."d.path=:directory_name");
+            $stmt->bindParam(':directory_name', $selector, PDO::PARAM_STR);
+        }
+        $stmt->execute();
+
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    public static function getFileInfo($db, $selector)
+    {
+        $query = "
+            SELECT
+                f.*, d.path AS directory_path
+            FROM
+                files f
+            JOIN
+                directories d ON f.directory_id = d.id
+            WHERE
+        ";
+        if (preg_match('/^\d+$/',$selector)) {
+            $stmt = $db->prepare($query."f.id=:file_id");
+            $stmt->bindParam(':file_id', $selector, PDO::PARAM_INT);
+        } else {
+            $pathParts = pathinfo($selector);
+            $directoryPath = $pathParts['dirname'];
+            $fileName = $pathParts['basename'];
+            $stmt = $db->prepare($query."d.path = :directory_path
+                AND f.name = :file_name");
+            $stmt->bindParam(':directory_path', $directoryPath, PDO::PARAM_STR);
+            $stmt->bindParam(':file_name', $fileName, PDO::PARAM_STR);
+        }
         $stmt->execute();
 
         return $stmt->fetch(PDO::FETCH_ASSOC);

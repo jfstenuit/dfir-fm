@@ -84,60 +84,26 @@ class AdminController
             return;
         }
     
-        // Base storage directory
-        $baseStorageDir = realpath(__DIR__ . '/../../storage/files');
-        if ($baseStorageDir === false) {
-            error_log("Base storage directory does not exist");
-            echo json_encode(['success' => false, 'message' => 'Internal server error']);
-            return;
-        }
-
         if ($itemType === 'd') {
-            // Get directory details, including parent directory's path
-            $stmt = $db->prepare("
-                SELECT d.path AS path, p.path AS parent_path
-                FROM directories d
-                LEFT JOIN directories p ON d.parent_id = p.id
-                WHERE d.id = :id
-            ");
-            $stmt->bindParam(':id', $itemId, PDO::PARAM_INT);
-            $stmt->execute();
-            $directory = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-            if (!$directory) {
+            $directoryInfo = AccessMiddleware::getDirectoryInfo($db,$itemId);
+            if (!$directoryInfo) {
                 echo json_encode(['success' => false, 'message' => 'Directory not found or access denied']);
                 return;
             }
 
             // Check user access to parent directory
-            $accessRights = AccessMiddleware::checkAccess($db, $directory['parent_path'], $userId);
+            $accessRights = AccessMiddleware::checkAccess($db, $directoryInfo['parent_path'], $userId);
             if (!$accessRights['can_write']) {
                 echo json_encode(['success' => false, 'message' => 'Access denied to directory']);
                 return;
             }
 
-            $dirPath = realpath($baseStorageDir . DIRECTORY_SEPARATOR . ltrim($directory['path'], '/'));
-            if ($dirPath === false || strpos($dirPath, $baseStorageDir) !== 0) {
-                // Directory missing from the filesystem, clean up the database record
-                error_log("Directory missing from filesystem: " . $directory['path']);
-                $stmt = $db->prepare("DELETE FROM directories WHERE id = :id");
-                $stmt->bindParam(':id', $itemId, PDO::PARAM_INT);
-                $stmt->execute();
-        
-                echo json_encode(['success' => true, 'message' => 'Directory deleted from database (missing from filesystem)']);
-                return;
-            }
+            // We don't handle the case of directory missing from filesystem
+            // The abstracted filesystem logic is responsible for pruning empty directories
     
             // Ensure directory is empty
-            if (count(scandir($dirPath)) > 2) { // '.' and '..' are always present
+            if (($directoryInfo['subdirectory_count']+$directoryInfo['file_count'])>0) {
                 echo json_encode(['success' => false, 'message' => 'Directory is not empty']);
-                return;
-            }
-    
-            // Delete the directory
-            if (!rmdir($dirPath)) {
-                error_log("Failed to delete directory: $dirPath");
-                echo json_encode(['success' => false, 'message' => 'Failed to delete directory']);
                 return;
             }
     
@@ -148,45 +114,29 @@ class AdminController
     
             echo json_encode(['success' => true, 'message' => 'Directory deleted successfully']);
         } elseif ($itemType === 'f') {
-            // Get file details
-            $stmt = $db->prepare("
-                SELECT f.name, d.path AS directory_path
-                FROM files f
-                JOIN directories d ON f.directory_id = d.id
-                WHERE f.id = :id
-            ");
-            $stmt->bindParam(':id', $itemId, PDO::PARAM_INT);
-            $stmt->execute();
-            $file = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-            if (!$file) {
+            $fileInfo = AccessMiddleware::getFileInfo($db,$itemId);;
+            if (!$fileInfo) {
                 echo json_encode(['success' => false, 'message' => 'File not found or access denied']);
                 return;
             }
 
             // Check user access to parent directory
-            $accessRights = AccessMiddleware::checkAccess($db, $file['directory_path'], $userId);
+            $accessRights = AccessMiddleware::checkAccess($db, $fileInfo['directory_path'], $userId);
             if (!$accessRights['can_write']) {
                 echo json_encode(['success' => false, 'message' => 'Access denied to parent directory']);
                 return;
             }
             
-            $filePath = realpath($baseStorageDir . DIRECTORY_SEPARATOR . ltrim($file['directory_path'], '/') . DIRECTORY_SEPARATOR . $file['name']);
-            if ($filePath === false || strpos($filePath, $baseStorageDir) !== 0) {
-                // Directory missing from the filesystem, clean up the database record
-                error_log("File missing from filesystem: " . $file['name']);
-                $stmt = $db->prepare("DELETE FROM files WHERE id = :id");
-                $stmt->bindParam(':id', $itemId, PDO::PARAM_INT);
-                $stmt->execute();
-        
-                echo json_encode(['success' => true, 'message' => 'File deleted from database (missing from filesystem)']);
+            $storageEngine = StorageEngineFactory::create($config);
+            if (!$storageEngine->healthCheck()) {
+                Response::triggerSystemError();
                 return;
             }
 
             // Delete the file
-            if (!unlink($filePath)) {
+            if (!$storageEngine->remove($filePath)) {
                 error_log("Failed to delete file: $filePath");
-                echo json_encode(['success' => false, 'message' => 'Failed to delete file']);
+                echo json_encode(['success' => false, 'message' => 'Failed to delete file from storage']);
                 return;
             }
     
@@ -239,8 +189,8 @@ class AdminController
         $groupId = $result['group_id'];
 
         // Check if directory already exist
-        $result = AccessMiddleware::getDirectoryInfo($db, $cwd, $requestedDir);
-        if ($result) {
+        $directoryInfo = AccessMiddleware::getDirectoryInfo($db, $cwd . DIRECTORY_SEPARATOR . $requestedDir);
+        if ($directoryInfo) {
             // Directory already exist
             echo json_encode(['success' => false, 'message' => 'Directory already exists']);
             return;

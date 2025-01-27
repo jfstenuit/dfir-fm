@@ -86,6 +86,21 @@ class Database
     sha256 TEXT,
     FOREIGN KEY (uploaded_by) REFERENCES users(id),
     FOREIGN KEY (directory_id) REFERENCES directories(id)
+            );",
+
+            "CREATE TABLE IF NOT EXISTS uploads (
+    uuid TEXT PRIMARY KEY,
+    file_name TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    total_chunks INTEGER NOT NULL,
+    last_chunk_index INTEGER NOT NULL DEFAULT 0,
+    hash_state TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    status TEXT CHECK (status IN ('pending', 'in_progress', 'completed', 'failed')) DEFAULT 'pending',
+    last_update DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    user_id INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );"
         ];
 

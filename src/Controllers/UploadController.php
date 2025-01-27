@@ -6,141 +6,172 @@ use Core\Session;
 use Core\Database;
 use Core\Request;
 use Core\Response;
+use Backends\StorageEngineFactory;
 use Middleware\AccessMiddleware;
 use PDO;
 
 class UploadController
 {
 
-    public static function handle()
+    public static function handle($config,$db)
     {
-        // Fetch user-specific data from the database (e.g., files)
-        $db = Database::initialize(STORAGE_PATH . '/database/app.sqlite');
+        header('Content-Type: application/json');
+
         $userId = $_SESSION['user_id'];
 
         // Get the requested path from the query parameter `p`
-        $currentDirectory = isset($_POST['cwd']) ? trim($_POST['cwd']) ?? '/' : '/';
+        $currentDirectory = !empty($_POST['cwd']) ? trim($_POST['cwd']) : '/';
         $action = isset($_POST['a']) ? $_POST['a'] : null;
 
-        // Verify user has access to the current directory
-        $stmt = $db->prepare("
-SELECT
-    d.id AS directory_id,
-    COALESCE(ar.group_id, 1) AS group_id -- Use admin group ID (1) if group_id is NULL
-FROM
-    directories d
-LEFT JOIN
-    access_rights ar ON ar.directory_id = d.id
-LEFT JOIN
-    user_group ug ON ug.group_id = ar.group_id
-WHERE
-    d.path = :directory_name
-    AND (
-        1 IN (SELECT group_id FROM user_group WHERE user_id = :user_id) -- Check if user is in admin group
-        OR (
-            ar.group_id IN (SELECT group_id FROM user_group WHERE user_id = :user_id)
-            AND ( ar.can_write = TRUE OR ar.can_upload ) -- Non-admin group access
-        )
-    )");
-        $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
-        $stmt->bindParam(':directory_name', $currentDirectory, PDO::PARAM_STR);
-        $stmt->execute();
-
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        $hasPermission=false;
-        if ($result) {
-            $hasPermission=true;
+        // Check that the current directory exist
+        $directoryInfo = AccessMiddleware::getDirectoryInfo($db, $currentDirectory);
+        if (!$directoryInfo) {
+            error_log("Directory \"$currentDirectory\" does not exist in DB");
+            echo json_encode(['status' => 'error', 'message' => 'Directory does not exist', 'hasPermission' => false]);
+            return;
         }
 
-        if ($action === 'checkRights') {
-            header('Content-Type: application/json');
-            if ($hasPermission) {
-                echo json_encode(['status' => 'success', 'message' => 'Authorized to upload in this directory', 'hasPermission' => true]);
-            } else {
-                echo json_encode(['status' => 'error', 'message' => 'Not authorized or directory does not exist', 'hasPermission' => false]);
-            }
+        // Verify user has access to the current directory
+        $accessRights = AccessMiddleware::checkAccess($db, $currentDirectory, $userId);
+        if (! ( $accessRights['can_write'] || $accessRights['can_upload'])) {
+            // TODO: logging "Access denied"
+            error_log('Access denied for upload : '.print_r($accessRights,true));
+            echo json_encode(['status' => 'error', 'message' => 'Not authorized', 'hasPermission' => false]);
             return;
         }
         
-        $directoryId = $result['directory_id'];
-        $groupId = $result['group_id'];
+        if ($action === 'checkRights') {
+            echo json_encode(['status' => 'success', 'message' => 'Authorized to upload in this directory', 'hasPermission' => true]);
+            return;
+        }
 
-        $baseStorageDir = realpath(__DIR__ . '/../../storage/files');
-        $requestedPath = ltrim($currentDirectory, '/');
-        $realStorageDir = realpath($baseStorageDir . DIRECTORY_SEPARATOR . $requestedPath);
+        $directoryId = $directoryInfo['id'];
 
-        if (!is_dir($realStorageDir)) {
+        $storageEngine = StorageEngineFactory::create($config);
+        if (!$storageEngine->healthCheck()) {
             Response::triggerSystemError();
             return;
         }
 
-        header('Content-Type: application/json');
-
         // Get the file details
         $file = $_FILES['file'];
-        $chunkIndex = isset($_POST['dzuuid']) ? $_POST['dzchunkindex'] : null;
-        $chunkCount = isset($_POST['dztotalchunkcount']) ? $_POST['dztotalchunkcount'] : null;
+        $chunkIndex = isset($_POST['dzchunkindex']) ? (int)$_POST['dzchunkindex'] : null;
+        $chunkCount = isset($_POST['dztotalchunkcount']) ? (int)$_POST['dztotalchunkcount'] : null;
         $uuid = isset($_POST['dzuuid']) ? $_POST['dzuuid'] : uniqid();
         $originalFileName = $file['name'];
-        $fileSize = isset($_POST['dztotalfilesize']) ? $_POST['dztotalfilesize'] : null;
-        $chunkFile = $realStorageDir . DIRECTORY_SEPARATOR . '.' . $uuid . '-' . $chunkIndex;
-        if (move_uploaded_file($file['tmp_name'], $chunkFile)) {
-            // If all chunks are uploaded, merge them
-            if ($chunkIndex == $chunkCount - 1) {
-                $targetFile = $realStorageDir . DIRECTORY_SEPARATOR . $originalFileName;
-                $hashContext = hash_init('sha256');
-                $outFile = fopen($targetFile, 'wb');
-                for ($i = 0; $i < $chunkCount; $i++) {
-                    $chunkPath = $realStorageDir . DIRECTORY_SEPARATOR . '.' . $uuid . '-' . $i;
-                    if (file_exists($chunkPath)) {
-                        $inFile = fopen($chunkPath, 'rb');
-                        while ($buffer = fread($inFile, 8192)) {
-                            fwrite($outFile, $buffer);
-                            hash_update($hashContext, $buffer);
-                        }
-                        fclose($inFile);
-                        unlink($chunkPath);
-                    } else {
-                        fclose($outFile);
-                        echo json_encode(['status' => 'error', 'message' => "Missing chunk: $i"]);
-                        return;
-                    }
-                }
-                fclose($outFile);
-                $checksum = hash_final($hashContext);
-                $fileSize = filesize($targetFile);
-                $finfo = finfo_open(FILEINFO_MIME_TYPE);
-                $mimeType = finfo_file($finfo, $targetFile);
-                finfo_close($finfo);
-                $utcTimestamp = gmdate('Y-m-d H:i:s');
-                $remoteIp = Request::getClientIp();
+        $fileSize = isset($_POST['dztotalfilesize']) ? (int)$_POST['dztotalfilesize'] : null;
 
-                $stmt = $db->prepare("
-                INSERT INTO files
-                    (directory_id, name, uploaded_at, uploaded_by, uploaded_from, size, sha256)
-                VALUES
-                    (:directory_id, :name, :uploaded_at, :uploaded_by, :uploaded_from, :size, :sha256)");
-                $stmt->bindParam(':directory_id', $directoryId, PDO::PARAM_INT);
-                $stmt->bindParam(':name', $originalFileName, PDO::PARAM_STR);
-                $stmt->bindParam(':uploaded_at', $utcTimestamp, PDO::PARAM_STR);
-                $stmt->bindParam(':uploaded_by', $userId, PDO::PARAM_INT);
-                $stmt->bindParam(':uploaded_from', $remoteIp, PDO::PARAM_STR);
-                $stmt->bindParam(':size', $fileSize, PDO::PARAM_INT);
-                $stmt->bindParam(':sha256', $checksum, PDO::PARAM_STR);
-                $stmt->execute();
-                
-                $fileId = $db->lastInsertId();
-                $userInfo = AccessMiddleware::getUserInfo($db, $userId);
-                echo json_encode(['status' => 'success', 'message' => 'File uploaded successfully.',
-                    'file' => [ 'Name' => $originalFileName, 'Size' => $fileSize, 'SHA256' => $checksum,
-                                'Created' => $utcTimestamp, 'Uploaded by / from' => $userInfo['email'].'<br>'.$remoteIp ]
-                ]);
-            } else {
-                echo json_encode(['status' => 'progress', 'message' => 'Chunk uploaded.']);
-            }
+        // Validate fields
+        if (!$uuid || $chunkIndex === null || $chunkCount === null || !$fileSize) {
+            echo json_encode(['status' => 'error', 'message' => 'Invalid upload parameters.']);
+            return;
+        }
+
+        // Handle upload state from DB
+        $stmt = $db->prepare("SELECT * FROM uploads WHERE uuid = :uuid");
+        $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
+        $stmt->execute();
+        $upload = $stmt->fetch(PDO::FETCH_ASSOC);
+
+
+        $hashContext = null;
+        if (!$upload) {
+            // This is a new upload - create entry in DB, create storage
+            $storagePath = $currentDirectory . DIRECTORY_SEPARATOR . $originalFileName;
+            $stmt = $db->prepare("
+                INSERT INTO uploads (uuid, file_name, file_size, total_chunks, last_chunk_index, hash_state, storage_path, status, user_id)
+                VALUES (:uuid, :file_name, :file_size, :total_chunks, 0, '', :storage_path, 'in_progress', :user_id)
+            ");
+            $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
+            $stmt->bindParam(':file_name', $originalFileName, PDO::PARAM_STR);
+            $stmt->bindParam(':file_size', $fileSize, PDO::PARAM_INT);
+            $stmt->bindParam(':total_chunks', $chunkCount, PDO::PARAM_INT);
+            $stmt->bindParam(':storage_path', $storagePath, PDO::PARAM_STR);
+            $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
+            $stmt->execute();
+            $upload = [
+                'uuid' => $uuid,
+                'last_chunk_index' => -1,
+                'storage_path' => $storagePath
+            ];
+            $hashContext = hash_init('sha256');
+            $storageEngine->createElement($storagePath);
         } else {
-            echo json_encode(['status' => 'error', 'message' => 'Failed to upload chunk.']);
+            // Check if the chunk index is out of sequence
+            if ($chunkIndex !== (int)$upload['last_chunk_index'] + 1) {
+                echo json_encode(['status' => 'error', 'message' => 'Chunk out of sequence.']);
+                return;
+            }
+            $hashContext = unserialize( $upload['hash_state'] );
+        }
+
+        // Append the chunk to the target file
+        $chunkData = file_get_contents($file['tmp_name']);
+        $storageEngine->writeAppend($upload['storage_path'], $chunkData);
+
+        // Free the temporary file to release resources (maybe not necessary, but better safe than sorry)
+        if (is_file($file['tmp_name'])) {
+            unlink($file['tmp_name']);
+        }
+
+        // Update the hash state
+        hash_update($hashContext, $chunkData);
+        $hashState = serialize( $hashContext );
+
+        // Update the database with the latest chunk and hash state
+        $stmt = $db->prepare("
+            UPDATE uploads
+            SET last_chunk_index = :last_chunk_index, hash_state = :hash_state, last_update = CURRENT_TIMESTAMP
+            WHERE uuid = :uuid
+        ");
+        $stmt->bindParam(':last_chunk_index', $chunkIndex, PDO::PARAM_INT);
+        $stmt->bindParam(':hash_state', $hashState, PDO::PARAM_STR);
+        $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
+        $stmt->execute();
+
+        // If all chunks are uploaded, create entry
+        if ($chunkIndex == $chunkCount - 1) {
+            $finalFileSize  = $storageEngine->getSize($storagePath);
+            $checksum = hash_final($hashContext);
+            // $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            // $mimeType = finfo_file($finfo, $targetFile);
+            // finfo_close($finfo);
+            $utcTimestamp = gmdate('Y-m-d H:i:s');
+            $remoteIp = Request::getClientIp();
+
+            $stmt = $db->prepare("
+            INSERT INTO files
+                (directory_id, name, uploaded_at, uploaded_by, uploaded_from, size, sha256)
+            VALUES
+                (:directory_id, :name, :uploaded_at, :uploaded_by, :uploaded_from, :size, :sha256)");
+            $stmt->bindParam(':directory_id', $directoryId, PDO::PARAM_INT);
+            $stmt->bindParam(':name', $originalFileName, PDO::PARAM_STR);
+            $stmt->bindParam(':uploaded_at', $utcTimestamp, PDO::PARAM_STR);
+            $stmt->bindParam(':uploaded_by', $userId, PDO::PARAM_INT);
+            $stmt->bindParam(':uploaded_from', $remoteIp, PDO::PARAM_STR);
+            $stmt->bindParam(':size', $fileSize, PDO::PARAM_INT);
+            $stmt->bindParam(':sha256', $checksum, PDO::PARAM_STR);
+            $stmt->execute();
+            
+            $fileId = $db->lastInsertId();
+            $userInfo = AccessMiddleware::getUserInfo($db, $userId);
+
+            // Mark the upload as completed
+            $stmt = $db->prepare("
+                UPDATE uploads
+                SET status = 'completed', last_update = CURRENT_TIMESTAMP
+                WHERE uuid = :uuid
+            ");
+            $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
+            $stmt->execute();
+
+            echo json_encode(['status' => 'success', 'message' => 'File uploaded successfully.',
+                'file' => [ 'Name' => $originalFileName, 'Size' => $fileSize, 'SHA256' => $checksum,
+                            'Created' => $utcTimestamp, 'Uploaded by / from' => $userInfo['email'].'<br>'.$remoteIp ]
+            ]);
+        } else {
+            // If we are just in progress
+            echo json_encode(['status' => 'progress', 'message' => 'Chunk uploaded.']);
         }
     }
 }

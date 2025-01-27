@@ -19,25 +19,28 @@ class FileManagerController
         $currentPath = isset($_GET['p']) ? trim($_GET['p']) : '';
         $currentPath = $currentPath === '' ? '/' : $currentPath;
 
-        // Verify user has access to the current directory
-        $AccessRights = AccessMiddleware::checkAccess($db, $currentPath, $userId);
-
-        if (!$AccessRights['directory_id']) {
+        // Check that the directory exist
+        $directoryInfo = AccessMiddleware::getDirectoryInfo($db, $currentPath);
+        if (!$directoryInfo) {
+            error_log("Directory \"$currentPath\" does not exist in DB");
             Response::triggerNotFound();
             return;
         }
-        if (! ( $AccessRights['can_read'] || $AccessRights['can_upload'])) {
+        
+        // Verify user has access to the current directory
+        $accessRights = AccessMiddleware::checkAccess($db, $currentPath, $userId);
+        if (! ( $accessRights['can_read'] || $accessRights['can_upload'])) {
             error_log("Access denied");
             Response::triggerAccessDenied();
             return;
         }
 
-        $directoryId = $AccessRights['directory_id'];
+        $directoryId = $accessRights['directory_id'];
 
-        $items = AccessMiddleware::getDirectoryItems($db, $directoryId, $AccessRights);
+        $items = AccessMiddleware::getDirectoryItems($db, $directoryId, $accessRights);
 
         // Render the file manager view
-        \Views\FileManagerView::render($items, $currentPath, $AccessRights);
+        \Views\FileManagerView::render($items, $currentPath, $accessRights);
     }
 }
 ?>
