@@ -1,0 +1,47 @@
+# Dependency directories
+/vendor/
+
+# Environment files
+.env
+
+# Logs and temporary files
+/storage/logs/*
+/storage/files/*
+
+# Exclude SQLite database files (if applicable)
+/storage/database/*.sqlite
+
+# Exclude temporary maintenance scripts
+phpliteadmin*
+*.sh
+*.pl
+
+# Ignore files generated during builds
+/.dockerignore
+docker-compose.override.yml
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# IDE-specific files
+.idea/
+.vscode/
+*.iml
+
+# Composer artifacts
+composer.phar
+
+# Backup files
+*.bak
+*.swp
+*.swo
+*.tmp
+
+# Git-related files
+*.orig
+
+# Miscellaneous
+*.log
+.env
+

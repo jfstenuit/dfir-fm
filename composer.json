@@ -1,0 +1,21 @@
+{
+    "autoload": {
+        "psr-4": {
+            "Backends\\": "src/Backends/",
+            "Core\\": "src/Core/",
+            "Controllers\\": "src/Controllers/",
+            "Models\\": "src/Models/",
+            "Middleware\\": "src/Middleware/",
+            "Views\\": "src/Views/"
+        }
+    },
+    "require": {
+        "components/jquery": "^3.7",
+        "components/bootstrap": "^4.6",
+        "components/font-awesome": "^6.5",
+        "datatables/datatables": "^1.10",
+        "enyo/dropzone": "^5.9",
+        "phpmailer/phpmailer": "^6.9",
+        "sendgrid/sendgrid": "^8.1"
+    }
+}

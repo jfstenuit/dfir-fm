@@ -1,0 +1,14 @@
+RewriteEngine On
+
+# Prevent access to sensitive directories and files
+RewriteRule ^storage(/|$) - [R=404,L]
+RewriteRule ^\.env$ - [R=404,L]
+
+# If the URI is in /assets/ and the file does not exist, return 404
+RewriteCond %{REQUEST_URI} /(assets|vendor)(/|$)
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule .* - [R=404,L]
+
+# Redirect all other requests to index.php
+RewriteCond %{REQUEST_URI} !/(assets|vendor)(/|$)
+RewriteRule ^ index.php [L]

@@ -1,0 +1,24 @@
+version: '3.8'
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:80"
+    volumes:
+      # Persist database data in a named volume
+      - app-database:/var/www/html/storage/database
+      # Map /storage/files to a directory on the host
+      - ./storage/files:/var/www/html/storage/files
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  # Named volume for database persistence
+  app-database:
