@@ -16,6 +16,7 @@
         "datatables/datatables": "^1.10",
         "enyo/dropzone": "^5.9",
         "phpmailer/phpmailer": "^6.9",
-        "sendgrid/sendgrid": "^8.1"
+        "sendgrid/sendgrid": "^8.1",
+        "corejavascript/typeahead.js": "^1.3"
     }
 }

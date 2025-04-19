@@ -22,6 +22,11 @@ class Session
         $_SESSION['last_activity'] = time();
     }
 
+    public static function getUserId(): ?int
+    {
+        return isset($_SESSION['user_id']) ? (int) $_SESSION['user_id'] : null;
+    }
+
     public static function logout()
     {
         // Start the session if not already started

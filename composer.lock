@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "d9abc1343d645b5b59f3072675ab6700",
+    "content-hash": "8989f5febf117154c748e0daf2dcab3b",
     "packages": [
         {
             "name": "components/bootstrap",
@@ -160,6 +160,47 @@
                 "wiki": "http://docs.jquery.com/"
             },
             "time": "2023-09-22T01:43:46+00:00"
+        },
+        {
+            "name": "corejavascript/typeahead.js",
+            "version": "v1.3.4",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/corejavascript/typeahead.js.git",
+                "reference": "4ce56fdb7c6eb91c536c9139afab46726b0f76b1"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/corejavascript/typeahead.js/zipball/4ce56fdb7c6eb91c536c9139afab46726b0f76b1",
+                "reference": "4ce56fdb7c6eb91c536c9139afab46726b0f76b1",
+                "shasum": ""
+            },
+            "type": "library",
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Twitter Inc.",
+                    "homepage": "https://twitter.com/twitteross"
+                },
+                {
+                    "name": "Jake Harding",
+                    "homepage": "https://github.com/jharding"
+                }
+            ],
+            "description": "fast and fully-featured autocomplete library",
+            "homepage": "https://typeahead.js.org/",
+            "keywords": [
+                "autocomplete",
+                "typeahead"
+            ],
+            "support": {
+                "issues": "https://github.com/corejavascript/typeahead.js/issues",
+                "source": "https://github.com/corejavascript/typeahead.js/tree/v1.3.4"
+            },
+            "time": "2024-01-15T22:59:25+00:00"
         },
         {
             "name": "datatables/datatables",

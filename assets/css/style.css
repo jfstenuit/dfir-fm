@@ -131,4 +131,42 @@ a:hover {
     text-decoration: underline;
 }
 
+/* Operation result modal on top of other modals */
 
+#operationResultModal {
+    z-index: 1060 !important;
+}
+.modal-backdrop.show + #operationResultModal {
+    z-index: 1060 !important;
+}
+  
+
+/* --- Typeahead Styling for Bootstrap 4 --- */
+
+.tt-menu {
+    background-color: #fff;
+    border: 1px solid #ced4da;
+    border-radius: 0.25rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,.1);
+    max-height: 250px;
+    overflow-y: auto;
+    z-index: 1000; /* ensure it's above modals/forms */
+    width: 100%;
+  }
+  
+  .tt-suggestion {
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  
+  .tt-suggestion:hover,
+  .tt-suggestion.tt-cursor {
+    background-color: #f8f9fa;
+    color: #212529;
+  }
+  
+  .tt-suggestion strong {
+    font-weight: 600;
+  }
+  

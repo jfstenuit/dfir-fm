@@ -60,6 +60,10 @@ switch ($requestUri) {
     case '/admin':
         Controllers\AdminController::handle($config,$db);
         break;
+
+    case '/profile':
+        Controllers\ProfileController::handle($config,$db);
+        break;
     
     case '/login':
         Controllers\LoginController::handle($config,$db);

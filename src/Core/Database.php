@@ -72,7 +72,8 @@ class Database
     can_write BOOLEAN NOT NULL DEFAULT FALSE,
     can_upload BOOLEAN NOT NULL DEFAULT FALSE,
     FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
-    FOREIGN KEY (directory_id) REFERENCES directories(id) ON DELETE CASCADE
+    FOREIGN KEY (directory_id) REFERENCES directories(id) ON DELETE CASCADE,
+    UNIQUE (group_id, directory_id)
             );",
 
             "CREATE TABLE IF NOT EXISTS files (

@@ -2,6 +2,13 @@
 // src/Views/FileManagerView.php
 namespace Views;
 
+use Views\Modals\DeleteConfirmationModal;
+use Views\Modals\NewFolderModal;
+use Views\Modals\OperationResultModal;
+use Views\Modals\UploadModal;
+use Views\Modals\AccessRightsModal;
+use Views\Modals\ProfileModal;
+
 class FileManagerView
 {
     public static function render($items,$cwd,$userPermissions)
@@ -24,6 +31,7 @@ class FileManagerView
   <script src="vendor/datatables/datatables/media/js/jquery.dataTables.min.js"></script>
   <script src="vendor/datatables/datatables/media/js/dataTables.bootstrap4.min.js"></script>
   <script src="vendor/enyo/dropzone/dist/min/dropzone.min.js"></script>
+  <script src="vendor/corejavascript/typeahead.js/dist/typeahead.bundle.min.js"></script>
   <script src="assets/js/site.js"></script>
 </head>
 <body class="navbar-fixed">
@@ -61,20 +69,28 @@ class FileManagerView
           </a>
         </li>
         <li class="nav-item">
-          <a title="Invite" class="nav-link" href="#" data-toggle="modal" data-target="#inviteModal">
-            <i class="fa fa-user-plus" aria-hidden="true"></i> Invite
-          </a>
+        <a title="Access Rights" class="nav-link" href="#" data-toggle="modal" data-target="#accessRightsModal">
+            <i class="fa fa-users-cog" aria-hidden="true"></i> Access Rights
+        </a>
         </li>
         <?php endif; ?>
         <li class="nav-item">
-            <a title="Settings" class="dropdown-item nav-link" href="?p=&amp;settings=1"><i class="fa fa-cog" aria-hidden="true"></i> Settings</a>
+            <a title="Settings" class="dropdown-item nav-link" href="./admin"><i class="fa fa-cog" aria-hidden="true"></i> Settings</a>
         </li>
-        <li class="nav-item">
-            <a title="Logout" class="nav-link" href="logout">
-                <i class="fa fa-sign-out" aria-hidden="true"></i> Logout
+        <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                <i class="fa fa-user" aria-hidden="true"></i> Account
             </a>
+            <div class="dropdown-menu dropdown-menu-right" aria-labelledby="userDropdown">
+                <a class="dropdown-item" href="#" data-toggle="modal" data-target="#profileModal">
+                <i class="fa fa-key" aria-hidden="true"></i> Change Password
+                </a>
+                <a class="dropdown-item" href="logout">
+                <i class="fa fa-sign-out" aria-hidden="true"></i> Logout
+                </a>
+            </div>
         </li>
-      </ul>
+    </ul>
     </div>
   </div>
   </nav>
@@ -126,147 +142,14 @@ class FileManagerView
       </table>
     </div>
   </form>
-  <!-- Upload Modal -->
-  <div class="modal fade" id="uploadModal" tabindex="-1" role="dialog" aria-labelledby="uploadModalLabel" aria-hidden="true">
-      <div class="modal-dialog" role="document">
-          <div class="modal-content">
-              <div class="modal-header">
-                  <h5 class="modal-title" id="uploadModalLabel">Upload Files</h5>
-                  <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                      <span aria-hidden="true">&times;</span>
-                  </button>
-              </div>
-              <div class="modal-body">
-                  <!-- Dropzone Form -->
-                  <form action="upload" class="dropzone" id="fileUploader" enctype="multipart/form-data">
-                    <input type="hidden" id="cwd" name="cwd" value="<?php echo rtrim($cwd, '/'); ?>">
-                  </form>
-              </div>
-              <div class="modal-footer">
-                  <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-              </div>
-          </div>
-      </div>
-  </div>
-
-  <!-- New Folder Modal -->
-  <div class="modal fade" id="newFolderModal" tabindex="-1" role="dialog" aria-labelledby="newFolderModalLabel" aria-hidden="true">
-    <div class="modal-dialog" role="document">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="newFolderModalLabel">Create New Folder</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
-            </div>
-            <div class="modal-body">
-                <form id="newFolderForm">
-                    <div class="form-group">
-                        <label for="folderName">Folder Name</label>
-                        <input type="text" class="form-control" id="folderName" name="folderName" placeholder="Enter folder name" required>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary" id="createFolderButton">Create</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Operation Result Modal -->
-<div class="modal fade" id="operationResultModal" tabindex="-1" role="dialog" aria-labelledby="operationResultModalLabel" aria-hidden="true">
-    <div class="modal-dialog" role="document">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="operationResultModalLabel">Operation Result</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
-            </div>
-            <div class="modal-body" id="operationResultMessage">
-                <!-- Success or Failure message will be displayed here dynamically -->
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Delete Confirmation Modal -->
-<div class="modal fade" id="deleteConfirmModal" tabindex="-1" role="dialog" aria-labelledby="deleteConfirmModalLabel" aria-hidden="true">
-    <div class="modal-dialog" role="document">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="deleteConfirmModalLabel">Confirm Deletion</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
-            </div>
-            <div class="modal-body">
-                Are you sure you want to delete <span id="deleteItemName"></span>?
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-danger" id="confirmDeleteButton">Delete</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Invite Modal -->
-<div class="modal fade" id="inviteModal" tabindex="-1" role="dialog" aria-labelledby="inviteModalLabel" aria-hidden="true">
-    <div class="modal-dialog" role="document">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="inviteModalLabel">Invite User or Guest</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
-            </div>
-            <div class="modal-body">
-                <form id="inviteForm">
-                    <!-- Email Address Input -->
-                    <div class="form-group">
-                        <label for="inviteEmail">Email Address</label>
-                        <input type="email" class="form-control" id="inviteEmail" name="inviteEmail" placeholder="Enter email address" required>
-                    </div>
-                    
-                    <!-- Access Rights Options -->
-                    <div class="form-group">
-                        <label>Access Rights</label>
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" id="accessRead" name="accessRights[]" value="read">
-                            <label class="form-check-label" for="accessRead">Read</label>
-                        </div>
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" id="accessWrite" name="accessRights[]" value="write">
-                            <label class="form-check-label" for="accessWrite">Write</label>
-                        </div>
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" id="accessUpload" name="accessRights[]" value="upload" checked>
-                            <label class="form-check-label" for="accessUpload">Upload</label>
-                        </div>
-                    </div>
-                    
-                    <!-- Send Invitation Checkbox -->
-                    <div class="form-group form-check">
-                        <input type="checkbox" class="form-check-input" id="sendLink" name="sendLink" checked>
-                        <label class="form-check-label" for="sendLink">Send Invitation Link</label>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary" id="sendInviteButton">Send Invite</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-  </div>
+<?php
+UploadModal::render($cwd);
+NewFolderModal::render();
+OperationResultModal::render();
+DeleteConfirmationModal::render();
+AccessRightsModal::render($cwd);
+ProfileModal::render($cwd);
+?>
 </body>
 </html>
         <?php
