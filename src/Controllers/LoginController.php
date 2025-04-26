@@ -42,7 +42,7 @@ class LoginController
         $stmt = $db->prepare("
             SELECT u.id AS user_id, u.invitation_token, u.token_expiry
             FROM users u
-            WHERE u.email = :email
+            WHERE u.username = :email
         ");
         $stmt->bindParam(':email', $email, PDO::PARAM_STR);
         $stmt->execute();

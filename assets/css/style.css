@@ -140,6 +140,28 @@ a:hover {
     z-index: 1060 !important;
 }
   
+/* Admin UI */
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+.table th.actions,
+.table td.actions {
+  width: 120px;
+  text-align: center;
+}
+
+.table th.status,
+.table td.status {
+  width: 80px;
+  text-align: center;
+}
+
+.badge .fa-times,
+.badge .fa-plus {
+  cursor: pointer;
+}
 
 /* --- Typeahead Styling for Bootstrap 4 --- */
 

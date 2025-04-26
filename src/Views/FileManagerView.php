@@ -6,6 +6,7 @@ use Views\Modals\DeleteConfirmationModal;
 use Views\Modals\NewFolderModal;
 use Views\Modals\OperationResultModal;
 use Views\Modals\UploadModal;
+use Views\Modals\InviteModal;
 use Views\Modals\AccessRightsModal;
 use Views\Modals\ProfileModal;
 
@@ -69,14 +70,19 @@ class FileManagerView
           </a>
         </li>
         <li class="nav-item">
-        <a title="Access Rights" class="nav-link" href="#" data-toggle="modal" data-target="#accessRightsModal">
-            <i class="fa fa-users-cog" aria-hidden="true"></i> Access Rights
-        </a>
+          <a title="Invite Contributor" class="nav-link" href="#" data-toggle="modal" data-target="#inviteModal">
+              <i class="fa fa-user-plus" aria-hidden="true"></i> Invite
+          </a>
         </li>
-        <?php endif; ?>
+        <li class="nav-item">
+          <a title="Access Rights" class="nav-link" href="#" data-toggle="modal" data-target="#accessRightsModal">
+              <i class="fa fa-users-cog" aria-hidden="true"></i> Access Rights
+          </a>
+        </li>
         <li class="nav-item">
             <a title="Settings" class="dropdown-item nav-link" href="./admin"><i class="fa fa-cog" aria-hidden="true"></i> Settings</a>
         </li>
+        <?php endif; ?>
         <li class="nav-item dropdown">
             <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                 <i class="fa fa-user" aria-hidden="true"></i> Account
@@ -148,6 +154,7 @@ NewFolderModal::render();
 OperationResultModal::render();
 DeleteConfirmationModal::render();
 AccessRightsModal::render($cwd);
+InviteModal::render($cwd);
 ProfileModal::render($cwd);
 ?>
 </body>

@@ -11,9 +11,6 @@ class AccessMiddleware
         if (preg_match('/^\d+$/',$selector)) {
             $stmt = $db->prepare("SELECT * FROM users u WHERE u.id=:user_id");
             $stmt->bindParam(':user_id', $selector, PDO::PARAM_INT);
-        } elseif (filter_var($selector, FILTER_VALIDATE_EMAIL)) {
-            $stmt = $db->prepare("SELECT * FROM users u WHERE u.email=:user_email");
-            $stmt->bindParam(':user_email', $selector, PDO::PARAM_STR);
         } else {
             $stmt = $db->prepare("SELECT * FROM users u WHERE u.username=:user_name");
             $stmt->bindParam(':user_name', $selector, PDO::PARAM_STR);
@@ -26,8 +23,8 @@ class AccessMiddleware
         // If user not found and $createIfMissing is true, create a new entry
         if (!$ret) {
             $stmt = $db->prepare("
-                INSERT INTO users (username, password, email)
-                VALUES (:email, '!', :email)
+                INSERT INTO users (username, password)
+                VALUES (:email, '!')
             ");
             $stmt->bindParam(':email', $selector, PDO::PARAM_STR);
             $stmt->execute();
@@ -262,7 +259,7 @@ class AccessMiddleware
         $directories = [];
         $files = [];
 
-        // Fetch directories if user has view access
+        // Fetch sub-directories if user has view access
         if (!empty($accessRights['can_read'])) {
             $stmt = $db->prepare("
                 SELECT
@@ -272,7 +269,7 @@ class AccessMiddleware
                     NULL AS size,
                     NULL AS sha256,
                     d.created_at AS created_at,
-                    u.email AS created_by,
+                    u.username AS created_by,
                     d.created_from AS created_from
                 FROM
                     directories d
@@ -296,7 +293,7 @@ class AccessMiddleware
                     f.size AS size,
                     f.sha256 AS sha256,
                     f.uploaded_at AS created_at,
-                    u.email AS created_by,
+                    u.username AS created_by,
                     f.uploaded_from AS created_from
                 FROM
                     files f

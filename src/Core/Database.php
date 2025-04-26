@@ -35,7 +35,6 @@ class Database
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password TEXT NOT NULL,
-    email TEXT UNIQUE,
     invitation_token TEXT,
     token_expiry DATETIME
             );",
@@ -118,7 +117,7 @@ class Database
         $adminUserCheck = self::$connection->query("SELECT COUNT(*) FROM users WHERE username = 'admin'")->fetchColumn();
         if ($adminUserCheck == 0) {
             $hashedPassword = password_hash('admin', PASSWORD_DEFAULT);
-            self::$connection->exec("INSERT INTO users (username, password, email) VALUES ('admin', '$hashedPassword', 'admin@example.com')");
+            self::$connection->exec("INSERT INTO users (username, password) VALUES ('admin', '$hashedPassword')");
 
             $adminGroupId = self::$connection->query("SELECT id FROM groups WHERE name = 'admin'")->fetchColumn();
             $adminUserId = self::$connection->query("SELECT id FROM users WHERE username = 'admin'")->fetchColumn();

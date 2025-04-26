@@ -15,6 +15,26 @@ class StorageEngineLocal implements StorageEngineInterface
     }
 
     /**
+     * Normalize a path like realpath() but without requiring the target to exist.
+     */
+    private function normalizePath(string $path): string
+    {
+        $parts = [];
+        foreach (explode(DIRECTORY_SEPARATOR, $path) as $segment) {
+            if ($segment === '' || $segment === '.') {
+                continue;
+            }
+            if ($segment === '..') {
+                array_pop($parts);
+            } else {
+                $parts[] = $segment;
+            }
+        }
+
+        return DIRECTORY_SEPARATOR . implode(DIRECTORY_SEPARATOR, $parts);
+    }
+
+    /**
      * Validate and normalize the path to ensure it is within the base directory.
      *
      * @param string $path The input path to validate.
@@ -23,15 +43,35 @@ class StorageEngineLocal implements StorageEngineInterface
      */
     private function validatePath(string $path): string
     {
+        // 1. Ensure the input is valid UTF-8
+        if (!mb_check_encoding($path, 'UTF-8')) {
+            throw new \Exception("Path contains invalid UTF-8 characters.");
+        }
+
+        // 2. Reject URL-encoded characters (e.g. %2e)
+        if (preg_match('/%[0-9a-fA-F]{2}/', $path)) {
+            throw new \Exception("Encoded characters are not allowed in paths.");
+        }
+
+        // 3. Reject null bytes and ASCII control characters
+        if (preg_match('/[\x00-\x1F]/u', $path)) {
+            throw new \Exception("Path contains control or null characters.");
+        }
+
+        // 4. Reject obvious traversal and ambiguity
+        if (preg_match('/\.\.|\/{2,}|\\\\/', $path)) {
+            throw new \Exception("Suspicious path detected : ".$path);
+        }
+
         // Resolve the absolute path
         $lookupPath = $this->baseDirectory . DIRECTORY_SEPARATOR . ltrim($path, DIRECTORY_SEPARATOR);
-        $absolutePath = realpath($this->baseDirectory . DIRECTORY_SEPARATOR . ltrim($path, DIRECTORY_SEPARATOR));
-        // Check if the resolved path is within the base directory
-        if ($absolutePath === false || strpos($absolutePath, $this->baseDirectory) !== 0) {
+        $normalizedPath = $this->normalizePath($lookupPath);
+        // Ensure the path stays within baseDirectory
+        if (strpos($normalizedPath, $this->baseDirectory) !== 0) {
             throw new \Exception("Invalid path: $path. Directory traversal attempt detected.");
         }
 
-        return $absolutePath;
+        return $normalizedPath;
     }
 
     /**
@@ -155,12 +195,28 @@ class StorageEngineLocal implements StorageEngineInterface
      */
     public function remove(string $path): bool
     {
-        $absolutePath = $this->validatePath($path);
-
-        if (!is_file($absolutePath)) return false;
-        if (!unlink($absolutePath)) return false;
-
-        $this->pruneEmptyDirectories(dirname($absolutePath));
+        try {
+            $absolutePath = $this->validatePath($path);
+        } catch (\Exception $e) {
+            error_log("Failed to validate path in remove(): " . $e->getMessage());
+            return false;
+        }
+    
+        if (!file_exists($absolutePath)) {
+            return true; // Already gone = success
+        }
+    
+        if (is_file($absolutePath)) {
+            if (!unlink($absolutePath)) {
+                error_log("Failed to unlink file: $absolutePath");
+                return false;
+            }
+    
+            $this->pruneEmptyDirectories(dirname($absolutePath));
+            return true;
+        }
+    
+        // If it's not a file (e.g. dir, symlink?), still count as deleted
         return true;
     }
 

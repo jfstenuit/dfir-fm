@@ -73,14 +73,15 @@ class UploadController
         $stmt->execute();
         $upload = $stmt->fetch(PDO::FETCH_ASSOC);
 
-
         $hashContext = null;
         if (!$upload) {
+            error_log("No entry in upload table : this is a new upload");
             // This is a new upload - create entry in DB, create storage
-            $storagePath = $currentDirectory . DIRECTORY_SEPARATOR . $originalFileName;
+            $storagePath = rtrim($currentDirectory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $originalFileName;
+
             $stmt = $db->prepare("
                 INSERT INTO uploads (uuid, file_name, file_size, total_chunks, last_chunk_index, hash_state, storage_path, status, user_id)
-                VALUES (:uuid, :file_name, :file_size, :total_chunks, 0, '', :storage_path, 'in_progress', :user_id)
+                VALUES (:uuid, :file_name, :file_size, :total_chunks, -1, '', :storage_path, 'in_progress', :user_id)
             ");
             $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
             $stmt->bindParam(':file_name', $originalFileName, PDO::PARAM_STR);
@@ -97,8 +98,10 @@ class UploadController
             $hashContext = hash_init('sha256');
             $storageEngine->createElement($storagePath);
         } else {
+            error_log("Entry found in upload table : this is a new chunk of an existing upload");
             // Check if the chunk index is out of sequence
             if ($chunkIndex !== (int)$upload['last_chunk_index'] + 1) {
+                error_log("Chunk out of sequence : $chunkIndex (expected ".((int)$upload['last_chunk_index'] + 1).")");
                 echo json_encode(['status' => 'error', 'message' => 'Chunk out of sequence.']);
                 return;
             }
@@ -124,6 +127,7 @@ class UploadController
             SET last_chunk_index = :last_chunk_index, hash_state = :hash_state, last_update = CURRENT_TIMESTAMP
             WHERE uuid = :uuid
         ");
+        error_log("UPDATE uploads SET last_chunk_index = $chunkIndex, last_update = CURRENT_TIMESTAMP WHERE uuid = $uuid");
         $stmt->bindParam(':last_chunk_index', $chunkIndex, PDO::PARAM_INT);
         $stmt->bindParam(':hash_state', $hashState, PDO::PARAM_STR);
         $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
@@ -131,7 +135,8 @@ class UploadController
 
         // If all chunks are uploaded, create entry
         if ($chunkIndex == $chunkCount - 1) {
-            $finalFileSize  = $storageEngine->getSize($storagePath);
+            error_log("All chunks uploaded - create entry");
+            $finalFileSize  = $storageEngine->getSize($upload['storage_path']);
             $checksum = hash_final($hashContext);
             // $finfo = finfo_open(FILEINFO_MIME_TYPE);
             // $mimeType = finfo_file($finfo, $targetFile);
@@ -166,8 +171,9 @@ class UploadController
             $stmt->execute();
 
             echo json_encode(['status' => 'success', 'message' => 'File uploaded successfully.',
-                'file' => [ 'Name' => $originalFileName, 'Size' => $fileSize, 'SHA256' => $checksum,
-                            'Created' => $utcTimestamp, 'Uploaded by / from' => $userInfo['email'].'<br>'.$remoteIp ]
+                'file' => [ 'name' => $originalFileName, 'size' => $fileSize, 'sha256' => $checksum,
+                            'uploaded_at' => $utcTimestamp, 'uploaded_by' => $userInfo['username'],
+                            'uploaded_from' => $remoteIp, 'id' => $fileId ]
             ]);
         } else {
             // If we are just in progress

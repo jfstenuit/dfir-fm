@@ -2,6 +2,10 @@
 // src/Views/AdminView.php
 namespace Views;
 
+use Views\Modals\DeleteConfirmationModal;
+use Views\Modals\OperationResultModal;
+use Views\Modals\UserGroupModal;
+
 class AdminView
 {
     public static function render($users, $groups, $accessRights)
@@ -15,142 +19,161 @@ class AdminView
   <title>Admin Panel</title>
   <link rel="stylesheet" href="vendor/components/bootstrap/css/bootstrap.min.css">
   <link rel="stylesheet" href="vendor/components/font-awesome/css/all.min.css">
+  <!-- <link rel="stylesheet" href="vendor/datatables/datatables/media/css/jquery.dataTables.min.css"> -->
+  <link rel="stylesheet" href="vendor/datatables/datatables/media/css/dataTables.bootstrap4.min.css">
+  <link rel="stylesheet" href="vendor/enyo/dropzone/dist/min/dropzone.min.css">
   <link rel="stylesheet" href="assets/css/style.css">
   <script src="vendor/components/jquery/jquery.min.js"></script>
   <script src="vendor/components/bootstrap/js/bootstrap.min.js"></script>
+  <script src="vendor/datatables/datatables/media/js/jquery.dataTables.min.js"></script>
+  <script src="vendor/datatables/datatables/media/js/dataTables.bootstrap4.min.js"></script>
+  <script src="vendor/corejavascript/typeahead.js/dist/typeahead.bundle.min.js"></script>
   <script src="assets/js/site.js"></script>
 </head>
-<body>
+<body class="navbar-fixed">
   <div class="container-fluid">
-    <!-- Admin Navigation Bar -->
-    <nav class="navbar navbar-expand-lg navbar-light bg-white mb-4">
-      <a class="navbar-brand" href="#">Admin Panel</a>
-      <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#adminNavbar" aria-controls="adminNavbar" aria-expanded="false" aria-label="Toggle navigation">
+    <nav class="navbar navbar-expand-lg navbar-light bg-white mb-4 main-nav fixed-top">
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+              data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent"
+              aria-expanded="false" aria-label="Toggle navigation">
         <span class="navbar-toggler-icon"></span>
       </button>
-      <div class="collapse navbar-collapse" id="adminNavbar">
-        <ul class="navbar-nav ml-auto">
-          <li class="nav-item">
-            <a class="nav-link" href="."><i class="fa fa-folder"></i> File Manager</a>
-          </li>
-          <li class="nav-item">
-            <a class="nav-link" href="logout"><i class="fa fa-sign-out-alt"></i> Logout</a>
-          </li>
-        </ul>
+
+      <div class="collapse navbar-collapse">
+        <!-- Left side: Cog icon + nav pills for admin sections -->
+        <div class="col-xs-6 col-sm-5 d-flex align-items-center">
+          <i class="fa fa-cog mr-2" aria-hidden="true"></i>
+          <ul class="nav nav-pills">
+            <li class="nav-item">
+              <a class="nav-link active" href="#" data-toggle="tab" data-target="#usersTab">Users</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="#" data-toggle="tab" data-target="#groupsTab">Groups</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="#" data-toggle="tab" data-target="#logsTab">Logs</a>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Right side: Return to File Manager + Account Menu -->
+        <div class="col-xs-6 col-sm-7">
+          <ul class="navbar-nav justify-content-end">
+            <li class="nav-item">
+              <a title="Back to File Manager" class="nav-link" href="./">
+                <i class="fa fa-folder-open" aria-hidden="true"></i> File Manager
+              </a>
+            </li>
+            <li class="nav-item dropdown">
+              <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button"
+                 data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                <i class="fa fa-user" aria-hidden="true"></i> Account
+              </a>
+              <div class="dropdown-menu dropdown-menu-right" aria-labelledby="userDropdown">
+                <a class="dropdown-item" href="#" data-toggle="modal" data-target="#profileModal">
+                  <i class="fa fa-key" aria-hidden="true"></i> Change Password
+                </a>
+                <a class="dropdown-item" href="logout">
+                  <i class="fa fa-sign-out" aria-hidden="true"></i> Logout
+                </a>
+              </div>
+            </li>
+          </ul>
+        </div>
       </div>
     </nav>
-
-    <!-- Admin Tabs -->
-    <ul class="nav nav-tabs" id="adminTabs" role="tablist">
-      <li class="nav-item">
-        <a class="nav-link active" id="users-tab" data-toggle="tab" href="#users" role="tab" aria-controls="users" aria-selected="true">Users</a>
-      </li>
-      <li class="nav-item">
-        <a class="nav-link" id="groups-tab" data-toggle="tab" href="#groups" role="tab" aria-controls="groups" aria-selected="false">Groups</a>
-      </li>
-      <li class="nav-item">
-        <a class="nav-link" id="access-rights-tab" data-toggle="tab" href="#access-rights" role="tab" aria-controls="access-rights" aria-selected="false">Access Rights</a>
-      </li>
-    </ul>
-
-    <div class="tab-content" id="adminTabsContent">
-      <!-- Users Management -->
-      <div class="tab-pane fade show active" id="users" role="tabpanel" aria-labelledby="users-tab">
-        <div class="table-responsive mt-4">
-          <h4>Manage Users</h4>
-          <table class="table table-bordered table-hover">
-            <thead class="thead-light">
-              <tr>
-                <th>ID</th>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <?php foreach ($users as $user): ?>
-                <tr>
-                  <td><?php echo htmlspecialchars($user['id']); ?></td>
-                  <td><?php echo htmlspecialchars($user['email']); ?></td>
-                  <td><?php echo htmlspecialchars($user['role']); ?></td>
-                  <td><?php echo $user['active'] ? 'Active' : 'Inactive'; ?></td>
-                  <td>
-                    <a href="#" class="btn btn-sm btn-warning"><i class="fa fa-edit"></i> Edit</a>
-                    <a href="#" class="btn btn-sm btn-danger"><i class="fa fa-trash"></i> Delete</a>
-                  </td>
-                </tr>
-              <?php endforeach; ?>
-            </tbody>
-          </table>
-        </div>
+    <div class="tab-content pt-5">
+      <div class="tab-pane fade show active" id="usersTab">
+        <!-- Invite User Form -->
+        <form id="inviteUserForm" class="form-inline mb-3">
+          <div class="form-group mr-2">
+            <label for="inviteEmailInput" class="sr-only">Email</label>
+            <input type="email" class="form-control" id="inviteEmailInput" placeholder="Enter user email" required>
+          </div>
+          <button type="submit" class="btn btn-primary">Invite User</button>
+        </form>
+        <!-- Users Table -->
+        <table id="usersTable" class="table table-bordered table-hover table-sm bg-white">
+          <thead class="thead-light">
+            <tr>
+              <th>User</th>
+              <th>Groups</th>
+              <th class="status">Status</th>
+              <th class="actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Template -->
+            <tr id="userRowTemplate" class="d-none">
+              <td class="user-email"></td>
+              <td class="user-groups"></td>
+              <td class="status text-center"></td>
+              <td class="actions text-center">
+                <button class="btn btn-sm btn-link resend-invite" title="Re-send invitation email">
+                  <i class="fa fa-envelope-open-text"></i>
+                </button>
+                <button class="btn btn-sm btn-link lock-user" title="Lock this user">
+                  <i class="fa fa-lock"></i>
+                </button>
+                <button class="btn btn-sm btn-link text-danger delete-user" title="Delete user">
+                  <i class="fa fa-trash"></i>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
-      <!-- Groups Management -->
-      <div class="tab-pane fade" id="groups" role="tabpanel" aria-labelledby="groups-tab">
-        <div class="table-responsive mt-4">
-          <h4>Manage Groups</h4>
-          <table class="table table-bordered table-hover">
-            <thead class="thead-light">
-              <tr>
-                <th>ID</th>
-                <th>Name</th>
-                <th>Description</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <?php foreach ($groups as $group): ?>
-                <tr>
-                  <td><?php echo htmlspecialchars($group['id']); ?></td>
-                  <td><?php echo htmlspecialchars($group['name']); ?></td>
-                  <td><?php echo htmlspecialchars($group['description']); ?></td>
-                  <td>
-                    <a href="#" class="btn btn-sm btn-warning"><i class="fa fa-edit"></i> Edit</a>
-                    <a href="#" class="btn btn-sm btn-danger"><i class="fa fa-trash"></i> Delete</a>
-                  </td>
-                </tr>
-              <?php endforeach; ?>
-            </tbody>
-          </table>
-        </div>
+      <div class="tab-pane fade" id="groupsTab">
+        <!-- Groups DataTable -->
+        <table id="groupsTable" class="table table-bordered table-hover table-sm bg-white">
+          <thead class="thead-light">
+            <tr>
+              <th>Group</th>
+              <th>Members</th>
+              <th>Accessed Directories</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Template -->
+            <tr id="groupRowTemplate" class="d-none">
+              <td class="group-name"></td>
+              <td class="group-members"></td>
+              <td class="group-directories"></td>
+              <td class="group-actions text-center">
+                <button class="btn btn-sm btn-danger delete-group" data-group="">
+                  <i class="fa fa-trash"></i>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
-      <!-- Access Rights Management -->
-      <div class="tab-pane fade" id="access-rights" role="tabpanel" aria-labelledby="access-rights-tab">
-        <div class="table-responsive mt-4">
-          <h4>Manage Access Rights</h4>
-          <table class="table table-bordered table-hover">
-            <thead class="thead-light">
-              <tr>
-                <th>Directory</th>
-                <th>Group</th>
-                <th>Can View</th>
-                <th>Can Write</th>
-                <th>Can Upload</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <?php foreach ($accessRights as $access): ?>
-                <tr>
-                  <td><?php echo htmlspecialchars($access['directory']); ?></td>
-                  <td><?php echo htmlspecialchars($access['group']); ?></td>
-                  <td><?php echo $access['can_view'] ? 'Yes' : 'No'; ?></td>
-                  <td><?php echo $access['can_write'] ? 'Yes' : 'No'; ?></td>
-                  <td><?php echo $access['can_upload'] ? 'Yes' : 'No'; ?></td>
-                  <td>
-                    <a href="#" class="btn btn-sm btn-warning"><i class="fa fa-edit"></i> Edit</a>
-                    <a href="#" class="btn btn-sm btn-danger"><i class="fa fa-trash"></i> Delete</a>
-                  </td>
-                </tr>
-              <?php endforeach; ?>
-            </tbody>
-          </table>
-        </div>
+      <div class="tab-pane fade" id="logsTab">
+        <!-- Logs DataTable -->
+        <table id="logsTable" class="table table-bordered table-hover table-sm bg-white">
+          <thead class="thead-light">
+            <tr>
+              <th>Timestamp</th>
+              <th>User</th>
+              <th>Action</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- populated via JS -->
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
+<?php
+OperationResultModal::render();
+DeleteConfirmationModal::render();
+UserGroupModal::render();
+?>
 </body>
 </html>
         <?php

@@ -21,6 +21,8 @@ class AdminController
             self::deleteItem($config,$db);
         } elseif ($action === "invite") {
             self::inviteUser($config,$db);
+        } elseif ($action === "updatePassword") {
+            self::updatePassword($config,$db);
         } elseif ($action === "listGroupPermissions") {
             self::listGroupPermissions($config, $db);
         } elseif ($action === "listGroups") {
@@ -31,6 +33,22 @@ class AdminController
             self::setAccessRight($config, $db);
         } elseif ($action === "removeAccessRight") {
             self::removeAccessRight($config, $db);
+        } elseif ($action === "listUsers") {
+            self::listUsers($config, $db);
+        } elseif ($action === 'deleteUser') {
+            self::deleteUser($db);
+        } elseif ($action === "addUserToGroup") {
+            self::addUserToGroup($config, $db);
+        } elseif ($action === "removeUserFromGroup") {
+            self::removeUserFromGroup($config, $db);
+        } elseif ($action === "lockUser") {
+            self::lockUser($config, $db);
+        } elseif ($action === "resendInvite") {
+            self::resendInvite($config, $db);
+        } elseif ($action === "listGroupsWithDetails") {
+            self::listGroupsWithDetails($config, $db);
+        } elseif ($action === "deleteGroup") {
+            self::deleteGroup($config, $db);
         } else {
             // Render the admin view
             $users=[]; $groups=[]; $accessRights=[];
@@ -39,20 +57,13 @@ class AdminController
     }
 
     public static function inviteUser($config, $db) {
-        $email = trim($_POST['email']) ?? '';
-        $directory = trim($_POST['cwd']) ?? '';
-        $userId = $_SESSION['user_id'];
-        $accessRights = $_POST['accessRights'] ?? [];
-        $sendLink = isset($_POST['sendLink']) && $_POST['sendLink'] === 'true';
-    
         header('Content-Type: application/json');
-    
-        // Check access rights to the directory
-        $AccessRights = AccessMiddleware::checkAccess($db, $directory, $userId);
-        if (!$AccessRights['is_admin']) {
-            echo json_encode(['success' => false, 'message' => 'Access denied to directory']);
-            return;
-        }
+
+        $email = trim($_POST['email']) ?? '';
+        $cwd = trim($_POST['cwd'] ?? '/');
+        $userId = $_SESSION['user_id'];
+        $sendLink = isset($_POST['sendLink']) && $_POST['sendLink'] === 'true';
+        $accessRights = $_POST['accessRights'] ?? [];
     
         // Validate email syntax
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -60,23 +71,67 @@ class AdminController
             return;
         }
     
+        // Validate cwd (should exist)
+        $directoryInfo = AccessMiddleware::getDirectoryInfo($db, $cwd);
+        if (!$directoryInfo) {
+            echo json_encode(['success' => false, 'message' => 'Invalid target directory']);
+            return;
+        }
+        $directoryId = $directoryInfo['id'];
+
         // Get User ID - create if user not found
         $invitedUserInfo = AccessMiddleware::getUserInfo($db, $email, true);
         if (!$invitedUserInfo) {
             echo json_encode(['success' => false, 'message' => 'Could not create user']);
             return;
         }
-    
-        // Get group ID based on access rights - create if not found
-        $groupId = AccessMiddleware::getContributorGroupId($db, $directory, $accessRights);
-        if (!$groupId) {
-            echo json_encode(['success' => false, 'message' => 'Could not get contributor group']);
+        $invitedUserId = $invitedUserInfo['id'];
+
+        // Find or create a group for the user's domain
+        $domain = substr(strrchr($email, "@"), 1);
+        $groupName = $domain . ' users';
+
+        $stmt = $db->prepare("INSERT OR IGNORE INTO groups (name) VALUES (:name)");
+        $stmt->execute([':name' => $groupName]);
+
+        $stmt = $db->prepare("SELECT id FROM groups WHERE name = :name");
+        $stmt->execute([':name' => $groupName]);
+        $groupID = $stmt->fetchColumn();
+
+        if (!$groupID) {
+            echo json_encode(['success' => false, 'message' => 'Could not find or create group']);
             return;
         }
-    
-        // Add User to Group
-        AccessMiddleware::addUserToGroup($db, $invitedUserInfo['id'], $groupId);
-    
+
+        // Add user to that group
+        $stmt = $db->prepare("
+            INSERT OR IGNORE INTO user_group (user_id, group_id) VALUES (:user_id, :group_id)
+        ");
+        $stmt->execute([
+            ':user_id' => $invitedUserId,
+            ':group_id' => $groupID
+        ]);
+
+        // Grant access to group on directory
+        $stmt = $db->prepare("
+            INSERT OR IGNORE INTO access_rights (directory_id, group_id) VALUES (:dir_id, :group_id)
+        ");
+        $stmt->execute([
+            ':dir_id' => $directoryId,
+            ':group_id' => $groupID
+        ]);
+        $stmt = $db->prepare("
+            UPDATE access_rights SET can_view=:read , can_write=:write , can_upload=:upload
+            WHERE directory_id=:dir_id AND group_id=:group_id
+        ");
+        $stmt->execute([
+            ':read' => in_array('read', $accessRights) ? 1 : 0,
+            ':write' => in_array('write', $accessRights) ? 1 : 0,
+            ':upload' => in_array('upload', $accessRights) ? 1 : 0,
+            ':dir_id' => $directoryId,
+            ':group_id' => $groupID
+        ]);
+
         if ($sendLink) {
             // Generate invitation token
             $invitationToken = AccessMiddleware::generateTokenForUser($db, $email);
@@ -87,17 +142,21 @@ class AdminController
     
             // Format E-mail
             $baseUrl = Request::getBaseUrl();
-            $mailBody = InvitationView::render($email, $invitationToken, $directory, $baseUrl);
+            $mailBody = InvitationView::render($email, $invitationToken, $cwd, $baseUrl);
     
             // Send email
             $mailEngine = MailEngineFactory::create($config);
-            $mailEngine->send($email, 'Invitation to contribute on ' . $baseUrl, $mailBody);
+            $mailEngine->send($email, 'You have been invited to contribute on ' . $baseUrl, $mailBody);
         }
     
         echo json_encode(['success' => true, 'message' => 'Contributor invited']);
         return;
     }
-    
+
+    public static function updatePassword($config, $db) {
+        header('Content-Type: application/json');
+    }
+
     public static function deleteItem($config,$db) {
         $itemId = intval($_POST['id']) ?? 0;
         $itemType = trim($_POST['type']) ?? '';
@@ -111,7 +170,8 @@ class AdminController
             echo json_encode(['success' => false, 'message' => 'Invalid request parameters']);
             return;
         }
-    
+
+
         if ($itemType === 'd') {
             $directoryInfo = AccessMiddleware::getDirectoryInfo($db,$itemId);
             if (!$directoryInfo) {
@@ -126,9 +186,10 @@ class AdminController
                 return;
             }
 
-            // We don't handle the case of directory missing from filesystem
-            // The abstracted filesystem logic is responsible for pruning empty directories
-    
+            // We don't delete the empty directories, as we don't create them either
+            // Directories are only created when needed by files and removed when latest
+            // file in directory is removed ("pruning") - if storage engine supports dir hierarchy
+
             // Ensure directory is empty
             if (($directoryInfo['subdirectory_count']+$directoryInfo['file_count'])>0) {
                 echo json_encode(['success' => false, 'message' => 'Directory is not empty']);
@@ -162,7 +223,8 @@ class AdminController
             }
 
             // Delete the file
-            if (!$storageEngine->remove($fileInfo['directory_path'] . DIRECTORY_SEPARATOR . $fileInfo['name'])) {
+            $path = rtrim($fileInfo['directory_path'], DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $fileInfo['name'];
+            if (!$storageEngine->remove($path)) {
                 error_log("Failed to delete file: $filePath");
                 echo json_encode(['success' => false, 'message' => 'Failed to delete file from storage']);
                 return;
@@ -178,33 +240,40 @@ class AdminController
     }
         
     public static function createDirectory($config,$db) {
-        $cwd = trim($_POST['cwd']) ?? '';
-        $cwd = $cwd === '' ? '/' : $cwd;
-        $requestedDir = trim($_POST['name']) ?? '';
-        $userId = $_SESSION['user_id'];
-
         header('Content-Type: application/json');
 
-        // Validate Current Working Directory
-        $baseStorageDir = realpath(__DIR__ . '/../../storage/files');
-        $realCwdPath = realpath($baseStorageDir . DIRECTORY_SEPARATOR . ltrim($cwd, '/'));
+        $cwd = trim($_POST['cwd']) ?? '';
+        $cwd = $cwd === '' ? '/' : $cwd;
+        $folderName = trim($_POST['name']) ?? ''; // Supposed to be a name, not a path
+        $userId = $_SESSION['user_id'];
+        $remoteIp = Request::getClientIp();
 
-        // Check if the resolved path is within the base directory
-        if ($realCwdPath === false || strpos($realCwdPath, $baseStorageDir) !== 0) {
-            // Invalid path or directory traversal attempt
-            error_log("Invalid cwd: potential directory traversal detected");
-            echo json_encode(['success' => false, 'message' => 'Invalid current working directory']);
+        if (empty($folderName)) {
+            echo json_encode(['success' => false, 'message' => 'Missing folder name.']);
+            return;
+        }
+
+        // Construct new Dir Path (cwd + folder name)
+        $newDirPath = (rtrim($cwd, '/') === '' ? '' : rtrim($cwd, '/')) . '/' . ltrim($folderName, '/');
+
+        // Ensure folder doesn't already exist
+        $existing = $db->prepare("SELECT id FROM directories WHERE path = :path");
+        $existing->execute([':path' => $newDirPath]);
+        if ($existing->fetch()) {
+            echo json_encode(['success' => false, 'message' => 'Folder already exists.']);
             return;
         }
 
         // Validate name: must be a valid directory name
-        /*
-        if (!preg_match('/^[^<>:"/\\\\|?*\x00-\x1F]+$/', $requestedDir)) {
-            error_log("Invalid directory name: $requestedDir");
+        if (
+            !mb_check_encoding($folderName, 'UTF-8') ||
+            preg_match('/[<>\/\\\\&]/u', $folderName) ||
+            preg_match('/[\x00-\x1F\x7F]/', $folderName)
+        ) {
+            error_log("Invalid directory name: $folderName");
             echo json_encode(['success' => false, 'message' => 'Invalid directory name']);
             return;
         }
-        */
 
         // Check user access to cwd
         $accessRights = AccessMiddleware::checkAccess($db, $cwd, $userId);
@@ -213,44 +282,45 @@ class AdminController
             return;
         }
 
-        $directoryId = $result['directory_id'];
-        $groupId = $result['group_id'];
+        // Get parent directory Id
+        $stmt = $db->prepare("SELECT id FROM directories WHERE path = :cwd");
+        $stmt->execute([':cwd' => $cwd]);
+        $parent = $stmt->fetch(PDO::FETCH_ASSOC);
+        $parentDirectoryId = $parent ? (int)$parent['id'] : null;
 
-        // Check if directory already exist
-        $directoryInfo = AccessMiddleware::getDirectoryInfo($db, $cwd . DIRECTORY_SEPARATOR . $requestedDir);
-        if ($directoryInfo) {
-            // Directory already exist
-            echo json_encode(['success' => false, 'message' => 'Directory already exists']);
-            return;
-        }
-
-        // Attempt to create the directory
-        $newDirPath = $cwd . DIRECTORY_SEPARATOR . $requestedDir;
-        $realDirPath = $realCwdPath . DIRECTORY_SEPARATOR . $requestedDir;
-        if (!mkdir($realDirPath, 0755)) {
-            error_log("Failed to create directory: $realDirPath");
-            echo json_encode(['success' => false, 'message' => 'Failed to create directory']);
-            return;
-        }
+        // Get Username
+        $user = AccessMiddleware::getUserInfo($db, $userId);
+        $userName = $user['email'] ?? 'unknown';
 
         // Create database entry
         $utcTimestamp = gmdate('Y-m-d H:i:s');
-        $remoteIp = Request::getClientIp();
         $stmt = $db->prepare("
-        INSERT INTO directories
-            (name, path, parent_id, created_at, created_by, created_from)
-        VALUES
-            (:name, :path, :parent_id, :created_at, :created_by, :created_from)");
-        $stmt->bindParam(':name', $requestedDir, PDO::PARAM_STR);
-        $stmt->bindParam(':path', $newDirPath, PDO::PARAM_STR);
-        $stmt->bindParam(':parent_id', $directoryId, PDO::PARAM_INT);
-        $stmt->bindParam(':created_at', $utcTimestamp, PDO::PARAM_STR);
-        $stmt->bindParam(':created_by', $userId, PDO::PARAM_INT);
-        $stmt->bindParam(':created_from', $remoteIp, PDO::PARAM_STR);
-        $stmt->execute();
+            INSERT INTO directories
+                (name, path, parent_id, created_at, created_by, created_from)
+            VALUES
+                (:name, :path, :parent_id, :created_at, :created_by, :created_from)");
+        $stmt->execute([
+            ':name' => $folderName,
+            ':path' => $newDirPath,
+            ':parent_id' => $parentDirectoryId,
+            ':created_at' => $utcTimestamp,
+            ':created_by' => $userId,
+            ':created_from' => $remoteIp
+        ]);
+        $folderId = $db->lastInsertId();
 
         // Directory created successfully
-        echo json_encode(['success' => true, 'message' => 'Directory created successfully']);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Directory created successfully',
+            'folder' => [
+                'id' => $folderId,
+                'name' => $folderName,
+                'created_at' => $createdAt,
+                'created_by' => $user['username'] ?? $user['email'] ?? 'unknown',
+                'created_from' => $remoteIp
+            ]
+        ]);
     }
 
     private static function listGroupPermissions($config, PDO $db)
@@ -495,6 +565,301 @@ class AdminController
             echo json_encode(['success' => false, 'message' => 'Database error.']);
         }
     }
-        
+
+    private static function listUsers($config, PDO $db)
+    {
+        header('Content-Type: application/json');
+
+        $stmt = $db->query("SELECT id, username, email, password, invitation_token, token_expiry FROM users");
+        $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $result = [];
+
+        foreach ($users as $user) {
+            // Determine primary identifier: email if set, fallback to username
+            $identifier = $user['email'] ?: $user['username'];
+
+            // Determine active vs locked
+            $hasPassword = !empty($user['password']) && $user['password'] !== '!';
+            $hasValidToken = false;
+
+            if (!empty($user['invitation_token']) && !empty($user['token_expiry'])) {
+                $expiry = strtotime($user['token_expiry']);
+                $now = time();
+                if ($expiry > $now) {
+                    $hasValidToken = true;
+                }
+            }
+
+            $status = ($hasPassword || $hasValidToken) ? 'active' : 'locked';
+
+            // Get group memberships
+            $stmtGroups = $db->prepare("
+                SELECT g.name
+                FROM groups g
+                JOIN user_group ug ON g.id = ug.group_id
+                WHERE ug.user_id = :user_id
+            ");
+            $stmtGroups->execute([':user_id' => $user['id']]);
+            $groups = $stmtGroups->fetchAll(PDO::FETCH_COLUMN);
+
+            $result[] = [
+                'email' => $identifier,
+                'status' => $status,
+                'groups' => $groups
+            ];
+        }
+
+        echo json_encode($result);
+    }
+
+    private static function deleteUser($config, PDO $db)
+    {
+        header('Content-Type: application/json');
+
+        $email = trim($_POST['email'] ?? '');
+        if (empty($email)) {
+            echo json_encode(['success' => false, 'message' => 'Missing email.']);
+            return;
+        }
+
+        // Lookup user by email (username is email unless it's 'admin')
+        $stmt = $db->prepare("SELECT id FROM users WHERE email = :email OR username = :email");
+        $stmt->execute([':email' => $email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$user) {
+            echo json_encode(['success' => false, 'message' => 'User not found.']);
+            return;
+        }
+
+        if ($user['id']===1) {
+            echo json_encode(['success' => false, 'message' => 'Cannot delete the primary admin user.']);
+            return;
+        }
+
+        $stmt = $db->prepare("DELETE FROM users WHERE id = :id");
+        $success = $stmt->execute([':id' => $user['id']]);
+
+        if ($success) {
+            echo json_encode(['success' => true]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Failed to delete user.']);
+        }
+    }
+
+    private static function addUserToGroup($config, PDO $db)
+    {
+        header('Content-Type: application/json');
+    
+        $email = trim($_POST['email'] ?? '');
+        $groupName = trim($_POST['group'] ?? '');
+    
+        if (empty($email) || empty($groupName)) {
+            echo json_encode(['success' => false, 'message' => 'Missing email or group.']);
+            return;
+        }
+    
+        // Lookup user by email or username
+        $stmt = $db->prepare("SELECT id FROM users WHERE email = :email OR username = :email");
+        $stmt->execute([':email' => $email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+        if (!$user) {
+            echo json_encode(['success' => false, 'message' => 'User not found.']);
+            return;
+        }
+    
+        $userId = $user['id'];
+    
+        // Create group if it doesn't exist
+        $stmt = $db->prepare("SELECT id FROM groups WHERE name = :name");
+        $stmt->execute([':name' => $groupName]);
+        $group = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+        if (!$group) {
+            $stmt = $db->prepare("INSERT INTO groups (name) VALUES (:name)");
+            if (!$stmt->execute([':name' => $groupName])) {
+                echo json_encode(['success' => false, 'message' => 'Failed to create group.']);
+                return;
+            }
+    
+            $groupId = $db->lastInsertId();
+        } else {
+            $groupId = $group['id'];
+        }
+    
+        // Check for existing membership
+        $stmt = $db->prepare("SELECT 1 FROM user_group WHERE user_id = :uid AND group_id = :gid");
+        $stmt->execute([':uid' => $userId, ':gid' => $groupId]);
+        if ($stmt->fetch()) {
+            echo json_encode(['success' => false, 'message' => 'User is already in this group.']);
+            return;
+        }
+    
+        // Add membership
+        $stmt = $db->prepare("INSERT INTO user_group (user_id, group_id) VALUES (:uid, :gid)");
+        $success = $stmt->execute([':uid' => $userId, ':gid' => $groupId]);
+    
+        echo json_encode(['success' => $success]);
+    }
+
+    private static function removeUserFromGroup($config, PDO $db)
+    {
+        header('Content-Type: application/json');
+    
+        $email = trim($_POST['email'] ?? '');
+        $groupName = trim($_POST['group'] ?? '');
+    
+        if (empty($email) || empty($groupName)) {
+            echo json_encode(['success' => false, 'message' => 'Missing email or group name.']);
+            return;
+        }
+    
+        // Lookup user
+        $stmt = $db->prepare("SELECT id FROM users WHERE email = :email OR username = :email");
+        $stmt->execute([':email' => $email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+        if (!$user) {
+            echo json_encode(['success' => false, 'message' => 'User not found.']);
+            return;
+        }
+    
+        // Lookup group
+        $stmt = $db->prepare("SELECT id FROM groups WHERE name = :name");
+        $stmt->execute([':name' => $groupName]);
+        $group = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+        if (!$group) {
+            echo json_encode(['success' => false, 'message' => 'Group not found.']);
+            return;
+        }
+    
+        // Remove user-group relationship
+        $stmt = $db->prepare("DELETE FROM user_group WHERE user_id = :uid AND group_id = :gid");
+        $success = $stmt->execute([
+            ':uid' => $user['id'],
+            ':gid' => $group['id']
+        ]);
+    
+        if ($success) {
+            echo json_encode(['success' => true]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Failed to remove user from group.']);
+        }
+    }
+
+    private static function lockUser($config, PDO $db)
+    {
+        header('Content-Type: application/json');
+
+        $email = trim($_POST['email'] ?? '');
+
+        if (empty($email)) {
+            echo json_encode(['success' => false, 'message' => 'Missing email.']);
+            return;
+        }
+
+        // Lookup user
+        $stmt = $db->prepare("SELECT id FROM users WHERE email = :email OR username = :email");
+        $stmt->execute([':email' => $email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$user) {
+            echo json_encode(['success' => false, 'message' => 'User not found.']);
+            return;
+        }
+
+        // Lock the user
+        $stmt = $db->prepare("UPDATE users SET password = '!', token_expiry = 0 WHERE id = :id");
+        $success = $stmt->execute([':id' => $user['id']]);
+
+        echo json_encode(['success' => $success]);
+    }
+
+    private static function resendInvite($config, PDO $db)
+    {
+        $_POST['sendLink'] = 'true';
+        self::inviteUser($config, $db);
+    }
+
+    private static function listGroupsWithDetails($config, PDO $db)
+    {
+        header('Content-Type: application/json');
+    
+        $stmt = $db->query("SELECT id, name FROM groups");
+        $groups = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $result = [];
+    
+        foreach ($groups as $group) {
+            // Get group members
+            $stmtUsers = $db->prepare("
+                SELECT u.email FROM users u
+                JOIN user_group ug ON u.id = ug.user_id
+                WHERE ug.group_id = :group_id
+            ");
+            $stmtUsers->execute([':group_id' => $group['id']]);
+            $members = $stmtUsers->fetchAll(PDO::FETCH_COLUMN);
+    
+            // Get directory access rights
+            $stmtDirs = $db->prepare("
+                SELECT d.path, ar.can_view, ar.can_write, ar.can_upload
+                FROM access_rights ar
+                JOIN directories d ON d.id = ar.directory_id
+                WHERE ar.group_id = :group_id
+            ");
+            $stmtDirs->execute([':group_id' => $group['id']]);
+            $dirs = $stmtDirs->fetchAll(PDO::FETCH_ASSOC);
+    
+            $result[] = [
+                'id' => $group['id'],
+                'name' => $group['name'],
+                'members' => $members,
+                'directories' => $dirs
+            ];
+        }
+    
+        echo json_encode($result);
+    }
+
+    private static function deleteGroup($config, PDO $db)
+    {
+        header('Content-Type: application/json');
+
+        $groupName = trim($_POST['name'] ?? '');
+
+        if (empty($groupName)) {
+            echo json_encode(['success' => false, 'message' => 'Missing group name.']);
+            return;
+        }
+
+        // Lookup group
+        $stmt = $db->prepare("SELECT id FROM groups WHERE name = :name");
+        $stmt->execute([':name' => $groupName]);
+        $group = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$group) {
+            echo json_encode(['success' => false, 'message' => 'Group not found.']);
+            return;
+        }
+
+        // Optional: Warn if it has members
+        $stmtCheck = $db->prepare("SELECT COUNT(*) FROM user_group WHERE group_id = :gid");
+        $stmtCheck->execute([':gid' => $group['id']]);
+        $count = $stmtCheck->fetchColumn();
+
+        if ($count > 0) {
+            echo json_encode(['success' => false, 'message' => 'Cannot delete group with members. Remove users first.']);
+            return;
+        }
+
+        // Proceed to delete (will cascade in access_rights, user_group)
+        $stmt = $db->prepare("DELETE FROM groups WHERE id = :id");
+        $success = $stmt->execute([':id' => $group['id']]);
+
+        echo json_encode(['success' => $success]);
+    }
+
 }
 ?>
