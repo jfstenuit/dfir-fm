@@ -1,0 +1,82 @@
+body.login {
+    font-family: sans-serif;
+    background: #f8f9fa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+}
+h2 {
+    font-size: 1.2rem;
+}
+.login-container {
+    background: white;
+    padding: 2em;
+    border-radius: 8px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    width: 300px;
+}
+.form-group {
+    margin-bottom: 1em;
+}
+.form-group input {
+    width: 100%;
+    padding: 0.5em;
+    box-sizing: border-box;
+}
+.btn {
+    width: 100%;
+    padding: 0.5em;
+    background: #007bff;
+    color: white;
+    border: none;
+    cursor: pointer;
+    margin-top: 0.5em;
+}
+.btn:disabled {
+    background: #aaa;
+    cursor: not-allowed;
+}
+.d-none {
+    display: none;
+}
+#loginMessage {
+    color: red;
+    margin-top: 1em;
+    font-size: 0.9em;
+}
+/* Slide In From Right */
+@keyframes slideInRight {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+.slide-in-right {
+    animation: slideInRight 0.3s ease forwards;
+}
+
+/* Slide Out To Left */
+@keyframes slideOutLeft {
+    from { transform: translateX(0); opacity: 1; }
+    to { transform: translateX(-100%); opacity: 0; }
+}
+.slide-out-left {
+    animation: slideOutLeft 0.3s ease forwards;
+}
+
+/* Slide In From Left */
+@keyframes slideInLeft {
+    from { transform: translateX(-100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+.slide-in-left {
+    animation: slideInLeft 0.3s ease forwards;
+}
+
+/* Slide Out To Right */
+@keyframes slideOutRight {
+    from { transform: translateX(0); opacity: 1; }
+    to { transform: translateX(100%); opacity: 0; }
+}
+.slide-out-right {
+    animation: slideOutRight 0.3s ease forwards;
+}

@@ -570,14 +570,13 @@ class AdminController
     {
         header('Content-Type: application/json');
 
-        $stmt = $db->query("SELECT id, username, email, password, invitation_token, token_expiry FROM users");
+        $stmt = $db->query("SELECT id, username, `password`, invitation_token, token_expiry FROM users");
         $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $result = [];
 
         foreach ($users as $user) {
-            // Determine primary identifier: email if set, fallback to username
-            $identifier = $user['email'] ?: $user['username'];
+            $identifier = $user['username'];
 
             // Determine active vs locked
             $hasPassword = !empty($user['password']) && $user['password'] !== '!';
@@ -795,7 +794,7 @@ class AdminController
         foreach ($groups as $group) {
             // Get group members
             $stmtUsers = $db->prepare("
-                SELECT u.email FROM users u
+                SELECT u.username FROM users u
                 JOIN user_group ug ON u.id = ug.user_id
                 WHERE ug.group_id = :group_id
             ");

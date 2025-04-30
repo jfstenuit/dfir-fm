@@ -4,7 +4,10 @@ namespace Controllers;
 
 use Core\Config;
 use Core\Database;
+use Core\Request;
 use Core\Session;
+use Middleware\SecurityMiddleware;
+
 use PDO;
 
 class LoginController
@@ -24,12 +27,16 @@ class LoginController
 
             // Case B : standard login form
             $redirect = isset($_GET['redirect']) ? filter_var($_GET['redirect'], FILTER_SANITIZE_URL) : '';
-            error_log("Redirect: $redirect");
             require_once SRC_PATH . '/Views/LoginView.php';
             \Views\LoginView::render($redirect);
         } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Case C : process submited login form
-            self::processLogin($db);
+            $action = $_POST['action'] ?? null;
+            if ($action === 'checkUser') {
+                self::handleUserCheck($db);
+            } else {
+                self::processLogin($db);
+            }
         } else {
             http_response_code(405); // Method Not Allowed
             echo "Method Not Allowed";
@@ -86,6 +93,23 @@ class LoginController
         exit;
     }
 
+    private static function handleUserCheck($db)
+    {
+        header('Content-Type: application/json');
+        $email = trim($_POST['email'] ?? '');
+    
+        // Always respond the same way to avoid user enumeration
+        usleep(random_int(100000, 300000)); // Sleep 100–300ms
+    
+        $stmt = $db->prepare("SELECT id FROM users WHERE username = :email");
+        $stmt->bindParam(':email', $email, PDO::PARAM_STR);
+        $stmt->execute();
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+        // In the future, implement logic for known OIDC-based users
+        echo json_encode(['login_type' => 'password']);
+    }
+    
     public static function sanitizeRedirect($redirect)
     {
         // Get the base path of the application (e.g., "/a/b")
@@ -120,13 +144,22 @@ class LoginController
 
     public static function processLogin($db)
     {
+        header('Content-Type: application/json');
+    
         $username = trim($_POST['username'] ?? '');
         $password = trim($_POST['password'] ?? '');
         $redirect = isset($_POST['redirect']) ? filter_var($_POST['redirect'], FILTER_SANITIZE_URL) : null;
-
-
+    
         if (empty($username) || empty($password)) {
-            echo "Username and password are required.";
+            echo json_encode(['success' => false, 'message' => 'Username and password are required.']);
+            return;
+        }
+    
+        $ip = Request::getClientIp();
+        $key = 'login_attempts_' . md5($ip);
+
+        if (!SecurityMiddleware::throttle($key)) {
+            echo json_encode(['success' => false, 'message' => 'Too many login attempts. Try again later.']);
             return;
         }
 
@@ -134,17 +167,21 @@ class LoginController
         $stmt->bindParam(':username', $username, PDO::PARAM_STR);
         $stmt->execute();
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
-
+    
         if ($user && password_verify($password, $user['password'])) {
+            apcu_delete($key); // reset counter on successful login
             Session::authenticate($user['id']);
-
-            $loginPath = dirname($_SERVER['REQUEST_URI']);
-
-            header("Location: " . self::sanitizeRedirect($redirect));
-            exit;
+    
+            echo json_encode([
+                'success' => true,
+                'redirect' => self::sanitizeRedirect($redirect)
+            ]);
+            return;
         } else {
-            echo "Invalid username or password.";
+            apcu_store($key, $attempts + 1, 300); // expire after 5 min
+            echo json_encode(['success' => false, 'message' => 'Invalid username or password.']);
         }
     }
+    
 }
 ?>
