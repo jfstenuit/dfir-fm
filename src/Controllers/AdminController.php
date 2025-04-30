@@ -3,6 +3,7 @@
 namespace Controllers;
 
 use Middleware\AccessMiddleware;
+use Middleware\SecurityMiddleware;
 use Core\Request;
 use Backends\MailEngineFactory;
 use Backends\StorageEngineFactory;
@@ -15,6 +16,15 @@ class AdminController
     public static function handle($config, $db)
     {
         $action = isset($_POST['a']) ? trim($_POST['a']) ?? '' : '';
+
+        // Enforce CSRF on all POST requests
+        if ($_SERVER['REQUEST_METHOD'] === 'POST' && !SecurityMiddleware::validateCsrfToken()) {
+            header('Content-Type: application/json');
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => 'Invalid CSRF token']);
+            return;
+        }
+
         if ($action === "createFolder") {
             self::createDirectory($config,$db);
         } elseif ($action === "deleteItem") {
@@ -52,7 +62,7 @@ class AdminController
         } else {
             // Render the admin view
             $users=[]; $groups=[]; $accessRights=[];
-            \Views\AdminView::render($users, $groups, $accessRights);
+            AdminView::render($users, $groups, $accessRights);
         }
     }
 

@@ -20,7 +20,7 @@ function loadUserTable() {
         $template.remove(); // clean from DOM
     }
 
-    $.post('admin', { a: 'listUsers' })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'listUsers' }})
         .done(users => {
             const $tbody = $('#usersTable tbody');
             $tbody.empty();
@@ -85,11 +85,11 @@ function handleInviteUser(event) {
         return;
     }
 
-    $.post('admin', {
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: {
         a: 'invite',
         email: email,
         sendLink: false // just create user
-    }).done(data => {
+    }}).done(data => {
         showResultMessage(data.message || 'User created.', data.success);
         if (data.success) {
             $('#inviteEmailInput').val('');
@@ -113,7 +113,7 @@ function handleDeleteUser(event) {
     const email = $(event.target).closest('tr').data('user');
     if (!email || !confirm(`Delete user ${email}?`)) return;
 
-    $.post('admin', { a: 'deleteUser', email })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'deleteUser', email }})
         .done(data => {
             showResultMessage(data.message || 'User deleted.', data.success);
             if (data.success) loadUserTable();
@@ -127,7 +127,7 @@ function handleLockUser(event) {
     const email = $(event.target).closest('tr').data('user');
     if (!email || !confirm(`Lock user ${email}?`)) return;
 
-    $.post('admin', { a: 'lockUser', email })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'lockUser', email }})
         .done(data => {
             showResultMessage(data.message || 'User locked.', data.success);
             if (data.success) loadUserTable();
@@ -141,7 +141,7 @@ function handleResendInvite(event) {
     const email = $(event.target).closest('tr').data('user');
     if (!email) return;
 
-    $.post('admin', { a: 'resendInvite', email })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'resendInvite', email }})
         .done(data => {
             showResultMessage(data.message || 'Invitation resent.', data.success);
         })
@@ -169,7 +169,7 @@ function handleConfirmAddGroup(event) {
         return;
     }
 
-    $.post('admin', { a: 'addUserToGroup', email, group })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'addUserToGroup', email, group }})
         .done(data => {
             if (data.success) {
                 $('#addUserToGroupModal').modal('hide');
@@ -191,7 +191,7 @@ function handleRemoveFromGroup(event) {
 
     if (!email || !group) return;
 
-    $.post('admin', { a: 'removeUserFromGroup', email, group })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'removeUserFromGroup', email, group }})
         .done(data => {
             if (data.success) {
                 loadUserTable();

@@ -11,6 +11,14 @@ class Session
         }
     }
 
+    public static function getCsrfToken(): string {
+        self::start();
+        if (empty($_SESSION['csrf_token'])) {
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+        }
+        return $_SESSION['csrf_token'];
+    }
+    
     public static function isAuthenticated()
     {
         return isset($_SESSION['user_id']) && !empty($_SESSION['user_id']);

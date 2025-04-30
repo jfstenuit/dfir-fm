@@ -41,10 +41,10 @@ export function updatePassword() {
         return;
     }
 
-    $.post('profile', {
+    $.ajax({ url: 'profile', method: 'POST', dataType: 'json', data: {
         a: 'updatePassword',
         password: newPwd
-    })
+    }})
     .done(response => {
         if (response.success) {
             showResultMessage(response.message || 'Password updated.', true);
@@ -86,4 +86,15 @@ export function escapeUrl(url) {
         console.warn('Blocked unsafe URL:', url);
         return '#';
     }
+}
+
+export function setupCsrfHeader() {
+    const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+    if (!token) return;
+
+    $.ajaxSetup({
+        beforeSend: function (xhr) {
+            xhr.setRequestHeader('X-CSRF-Token', token);
+        }
+    });
 }

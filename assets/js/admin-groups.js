@@ -16,7 +16,7 @@ export function load() {
 }
 
 function loadGroupTable() {
-    $.post('admin', { a: 'listGroupsWithDetails' })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'listGroupsWithDetails' }})
         .done(groups => {
             if (!$groupRowTemplateCache) {
                 const $template = $('#groupRowTemplate');
@@ -81,7 +81,7 @@ function handleDeleteGroup(event) {
     const group = $btn.data('group');
     if (!group || !confirm(`Delete group "${group}"?`)) return;
 
-    $.post('admin', { a: 'deleteGroup', name: group })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'deleteGroup', name: group }})
         .done(data => {
             showResultMessage(data.message || 'Group deleted.', data.success);
             if (data.success) loadGroupTable();

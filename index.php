@@ -13,6 +13,7 @@ require_once BASE_PATH . '/vendor/autoload.php';
 use Core\Config;
 use Core\Database;
 use Core\Session;
+use Middleware\SecurityMiddleware;
 
 // Load configuration
 $config = Config::load(ENV_FILE);
@@ -40,6 +41,17 @@ if ($requestUri !== '/login') {
     if (!Session::isAuthenticated() || !Session::isStillValid()) {
         $currentUrl = $_SERVER['REQUEST_URI'];
         header('Location: login?redirect=' . urlencode($currentUrl));
+        exit;
+    }
+}
+
+// CSRF protection
+$csrfExemptRoutes = ['/login'];
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array($requestUri, $csrfExemptRoutes)) {
+    if (!SecurityMiddleware::validateCsrfToken()) {
+        header('Content-Type: application/json');
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Invalid CSRF token']);
         exit;
     }
 }

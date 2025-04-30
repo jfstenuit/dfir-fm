@@ -9,6 +9,7 @@ use Views\Modals\UploadModal;
 use Views\Modals\InviteModal;
 use Views\Modals\AccessRightsModal;
 use Views\Modals\ProfileModal;
+use Core\Session;
 
 class FileManagerView
 {
@@ -20,6 +21,7 @@ class FileManagerView
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="<?php echo Session::getCsrfToken(); ?>">
   <title>File Manager</title>
   <link rel="stylesheet" href="vendor/components/bootstrap/css/bootstrap.min.css">
   <link rel="stylesheet" href="vendor/components/font-awesome/css/all.min.css">
@@ -33,7 +35,7 @@ class FileManagerView
   <script src="vendor/datatables/datatables/media/js/dataTables.bootstrap4.min.js"></script>
   <script src="vendor/enyo/dropzone/dist/min/dropzone.min.js"></script>
   <script src="vendor/corejavascript/typeahead.js/dist/typeahead.bundle.min.js"></script>
-  <script src="assets/js/site.js"></script>
+  <script type="module" src="assets/js/site.js"></script>
 </head>
 <body class="navbar-fixed">
   <div class="container-fluid">

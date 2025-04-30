@@ -5,7 +5,7 @@ $(function() {
 
         if (!email) return $('#loginMessage').text('Please enter your email.');
 
-        $.post('login', { action: 'checkUser', email })
+        $.ajax({ url: 'login', method: 'POST', dataType: 'json', data: { action: 'checkUser', email }})
             .done(data => {
                 $('#step-login').addClass('slide-out-left');
                 setTimeout(() => {
@@ -49,7 +49,7 @@ $(function() {
         $('#loginMessage').text('');
         $('#loginBtn, #password').prop('disabled', true);
 
-        $.post('login', { action, username, password, redirect })
+        $.ajax({ url: 'login', method: 'POST', dataType: 'json', data: { action, username, password, redirect }})
             .done(data => {
                 if (data.success) {
                     window.location.href = data.redirect || '.';

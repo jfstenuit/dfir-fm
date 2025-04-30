@@ -5,6 +5,7 @@ namespace Views;
 use Views\Modals\DeleteConfirmationModal;
 use Views\Modals\OperationResultModal;
 use Views\Modals\UserGroupModal;
+use Core\Session;
 
 class AdminView
 {
@@ -16,6 +17,7 @@ class AdminView
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="<?php echo Session::getCsrfToken(); ?>">
   <title>Admin Panel</title>
   <link rel="stylesheet" href="vendor/components/bootstrap/css/bootstrap.min.css">
   <link rel="stylesheet" href="vendor/components/font-awesome/css/all.min.css">
@@ -28,7 +30,7 @@ class AdminView
   <script src="vendor/datatables/datatables/media/js/jquery.dataTables.min.js"></script>
   <script src="vendor/datatables/datatables/media/js/dataTables.bootstrap4.min.js"></script>
   <script src="vendor/corejavascript/typeahead.js/dist/typeahead.bundle.min.js"></script>
-  <script src="assets/js/site.js"></script>
+  <script type="module" src="assets/js/site.js"></script>
 </head>
 <body class="navbar-fixed">
   <div class="container-fluid">

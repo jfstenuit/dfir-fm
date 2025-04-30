@@ -171,7 +171,7 @@ function createFolder() {
         return;
     }
 
-    $.post('admin', { a: 'createFolder', name: folderName, cwd })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'createFolder', name: folderName, cwd }})
         .done(data => {
             $('#newFolderModal').modal('hide');
             if (data.success && data.folder) {
@@ -228,13 +228,13 @@ function sendInvite() {
 
     const sendLink = $('#sendLink').is(':checked');
 
-    $.post('admin', {
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: {
         a: 'invite',
         cwd,
         email,
         accessRights,
         sendLink
-    })
+    }})
     .done(data => {
         $('#inviteModal').modal('hide');
         showResultMessage(data.success ? 'Invitation sent.' : data.message || 'Failed.', data.success);
@@ -252,11 +252,11 @@ function handleDelete() {
     const name = $modal.data('name');
     const cwd = $('#cwd').val();
 
-    $.post('admin', {
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: {
         a: 'deleteItem',
         id: id,
         type: type
-    })
+    }})
         .done(function (data) {
             $('#deleteConfirmModal').modal('hide');
             if (data.success) {
@@ -290,7 +290,7 @@ function loadAccessRights() {
 
     $tbody.empty();
 
-    $.post('admin', { a: 'listGroupPermissions', cwd })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'listGroupPermissions', cwd }})
         .done(groups => {
             groups.forEach(group => {
                 const $row = $groupAccessRowTemplate.clone().removeClass('d-none').removeAttr('id');
@@ -324,7 +324,7 @@ function handleAddGroup(event) {
         return;
     }
 
-    $.post('admin', { a: 'createGroupIfNotExists', name: groupName, cwd })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'createGroupIfNotExists', name: groupName, cwd }})
         .done(data => {
             if (!data.success) {
                 showResultMessage(data.message || 'Failed to add group.', false);
@@ -362,7 +362,7 @@ function handleAccessRightsCheckboxToggle(event) {
         return;
     }
 
-    $.post('admin', { a: 'setAccessRight', group, cwd, right, value })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'setAccessRight', group, cwd, right, value }})
         .fail(xhr => {
             showResultMessage('Error updating right: ' + xhr.statusText, false);
         });
@@ -379,7 +379,7 @@ function handleAccessRightsRemoveGroup(event) {
         return;
     }
 
-    $.post('admin', { a: 'removeAccessRight', group, cwd })
+    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'removeAccessRight', group, cwd }})
         .done(data => {
             if (data.success) {
                 $row.remove();

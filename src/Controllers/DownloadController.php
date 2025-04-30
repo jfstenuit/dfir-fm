@@ -16,6 +16,14 @@ class DownloadController
     {
         $userId = $_SESSION['user_id'];
 
+        // Enforce CSRF on all POST requests
+        if ($_SERVER['REQUEST_METHOD'] === 'POST' && !SecurityMiddleware::validateCsrfToken()) {
+            header('Content-Type: application/json');
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => 'Invalid CSRF token']);
+            return;
+        }
+
         // Get the requested path from the query parameter `p`
         $requestedFile = trim($_GET['p']) ?? '';
         $pathParts = pathinfo($requestedFile);
