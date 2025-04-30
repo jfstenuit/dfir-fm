@@ -217,6 +217,8 @@ class AccessMiddleware
         if (preg_match('/^\d+$/',$selector)) {
             $stmt = $db->prepare($query."d.id=:directory_id");
             $stmt->bindParam(':directory_id', $selector, PDO::PARAM_INT);
+        } elseif ($selector==='') {
+            $stmt = $db->prepare($query."d.path='/'");
         } else {
             $stmt = $db->prepare($query."d.path=:directory_name");
             $stmt->bindParam(':directory_name', $selector, PDO::PARAM_STR);
@@ -254,63 +256,161 @@ class AccessMiddleware
         return $stmt->fetch(PDO::FETCH_ASSOC);
     }
 
-    public static function getDirectoryItems($db, $directoryId, $accessRights)
+    public static function getAdminDirectoryItems($db, $userId, $directoryInfo)
+    {
+        $directories = [];
+        $files = [];
+    
+        $cwd = rtrim($directoryInfo['path'], '/');
+        $cwdPrefix = $cwd === '' ? '/' : $cwd . '/';
+
+        $stmt = $db->prepare("
+            SELECT
+                'd' AS type,
+                d.id,
+                d.name,
+                NULL AS size,
+                NULL AS sha256,
+                d.created_at,
+                u.username AS created_by,
+                d.created_from
+            FROM directories d
+            LEFT JOIN users u ON d.created_by = u.id
+            WHERE d.parent_id = :parent_id
+        ");
+        $stmt->execute([':parent_id' => $directoryInfo['id']]);
+        $directories = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Fetch all files
+        $stmt = $db->prepare("
+            SELECT
+                'f' AS type,
+                f.id AS id,
+                f.name AS name,
+                f.size AS size,
+                f.sha256 AS sha256,
+                f.uploaded_at AS created_at,
+                u.username AS created_by,
+                f.uploaded_from AS created_from
+            FROM files f
+            JOIN users u ON f.uploaded_by = u.id
+            WHERE f.directory_id = :directory_id
+        ");
+        $stmt->execute([':directory_id' => $directoryInfo['id']]);
+        $files = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return array_merge($directories, $files);
+    }
+
+    public static function getDirectoryItems($db, $userId, $directoryInfo)
     {
         $directories = [];
         $files = [];
 
-        // Fetch sub-directories if user has view access
-        if (!empty($accessRights['can_read'])) {
+        $cwd = rtrim($directoryInfo['path'], '/');
+        $cwdPrefix = $cwd === '' ? '/' : $cwd . '/';
+
+        $accessRights = self::checkAccess($db, $cwd, $userId);
+
+        if (isset($accessRights['is_admin']) && $accessRights['is_admin']) {
+            return self::getAdminDirectoryItems($db, $userId, $directoryInfo);
+        }
+
+        // Step 1: Get accessible paths
+        $stmt = $db->prepare("
+            SELECT d.id, d.path
+            FROM directories d
+            JOIN access_rights ar ON ar.directory_id = d.id
+            JOIN user_group ug ON ar.group_id = ug.group_id
+            WHERE ug.user_id = :user_id
+            AND (ar.can_view = 1 OR ar.can_upload = 1 OR ar.can_write = 1)
+        ");
+        $stmt->execute([':user_id' => $userId]);
+        $accessiblePaths = $stmt->fetchAll(PDO::FETCH_KEY_PAIR); // id => path
+
+        // Step 2: Extract immediate children of cwd
+        $visibleSubpaths = [];
+        foreach ($accessiblePaths as $id => $path) {
+            if (strpos($path, $cwdPrefix) === 0) {
+                $remaining = substr($path, strlen($cwdPrefix));
+                if ($remaining !== '' && strpos($remaining, '/') === false) {
+                    // It's a direct child
+                    $visibleSubpaths[$id] = $cwdPrefix . $remaining;
+                }
+            }
+        }
+
+        if (!empty($visibleSubpaths)) {
+            // Step 3: Fetch metadata for visible subdirectories
+            $placeholders = implode(',', array_fill(0, count($visibleSubpaths), '?'));
             $stmt = $db->prepare("
                 SELECT
                     'd' AS type,
-                    d.id AS id,
-                    d.name AS name,
+                    d.id,
+                    d.name,
                     NULL AS size,
                     NULL AS sha256,
-                    d.created_at AS created_at,
+                    d.created_at,
                     u.username AS created_by,
-                    d.created_from AS created_from
-                FROM
-                    directories d
-                LEFT JOIN
-                    users u ON d.created_by = u.id
-                WHERE
-                    d.parent_id = :directory_id
+                    d.created_from
+                FROM directories d
+                LEFT JOIN users u ON d.created_by = u.id
+                WHERE d.path IN ($placeholders)
             ");
-            $stmt->bindParam(':directory_id', $directoryId, PDO::PARAM_INT);
-            $stmt->execute();
+            $stmt->execute(array_values($visibleSubpaths));
             $directories = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
 
-        // Fetch files if user has upload or view access
+        // Fetch files
         if (!empty($accessRights['can_upload']) || !empty($accessRights['can_read'])) {
-            $stmt = $db->prepare("
-                SELECT
-                    'f' AS type,
-                    f.id AS id,
-                    f.name AS name,
-                    f.size AS size,
-                    f.sha256 AS sha256,
-                    f.uploaded_at AS created_at,
-                    u.username AS created_by,
-                    f.uploaded_from AS created_from
-                FROM
-                    files f
-                JOIN
-                    users u ON f.uploaded_by = u.id
-                WHERE
-                    f.directory_id = :directory_id
-            ");
-            $stmt->bindParam(':directory_id', $directoryId, PDO::PARAM_INT);
-            $stmt->execute();
+            if (!empty($accessRights['can_read'])) {
+                // If user can read, show all files
+                $stmt = $db->prepare("
+                    SELECT
+                        'f' AS type,
+                        f.id AS id,
+                        f.name AS name,
+                        f.size AS size,
+                        f.sha256 AS sha256,
+                        f.uploaded_at AS created_at,
+                        u.username AS created_by,
+                        f.uploaded_from AS created_from
+                    FROM files f
+                    JOIN users u ON f.uploaded_by = u.id
+                    WHERE f.directory_id = :directory_id
+                ");
+                $stmt->execute([
+                    ':directory_id' => $directoryInfo['id']
+                ]);
+            } else {
+                // If user can only upload, show only own files
+                $stmt = $db->prepare("
+                    SELECT
+                        'f' AS type,
+                        f.id AS id,
+                        f.name AS name,
+                        f.size AS size,
+                        f.sha256 AS sha256,
+                        f.uploaded_at AS created_at,
+                        u.username AS created_by,
+                        f.uploaded_from AS created_from
+                    FROM files f
+                    JOIN users u ON f.uploaded_by = u.id
+                    WHERE f.directory_id = :directory_id
+                      AND f.uploaded_by = :user_id
+                ");
+                $stmt->execute([
+                    ':directory_id' => $directoryInfo['id'],
+                    ':user_id' => $userId
+                ]);
+            }
             $files = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
-
+    
         // Merge directories and files
         return array_merge($directories, $files);
     }
-
+    
     public static function getDirectoryById($db, $id)
     {
         $stmt = $db->prepare("

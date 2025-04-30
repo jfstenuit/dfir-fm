@@ -26,19 +26,12 @@ class FileManagerController
             Response::triggerNotFound();
             return;
         }
-        
-        // Verify user has access to the current directory
+
+        // Access rights for the directory and directory items are
+        // handled in getDirectoryItems
+        $items = AccessMiddleware::getDirectoryItems($db, $userId, $directoryInfo);
+
         $accessRights = AccessMiddleware::checkAccess($db, $currentPath, $userId);
-        if (! ( $accessRights['can_read'] || $accessRights['can_upload'])) {
-            error_log("Access denied");
-            Response::triggerAccessDenied();
-            return;
-        }
-
-        $directoryId = $accessRights['directory_id'];
-
-        $items = AccessMiddleware::getDirectoryItems($db, $directoryId, $accessRights);
-
         // Render the file manager view
         \Views\FileManagerView::render($items, $currentPath, $accessRights);
     }
