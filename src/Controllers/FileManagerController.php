@@ -6,7 +6,10 @@ use Core\Session;
 use Core\Database;
 use Core\Request;
 use Core\Response;
+use Core\App;
 use Middleware\AccessMiddleware;
+use Views\FileManagerView;
+
 use PDO;
 
 class FileManagerController
@@ -22,7 +25,7 @@ class FileManagerController
         // Check that the directory exist
         $directoryInfo = AccessMiddleware::getDirectoryInfo($db, $currentPath);
         if (!$directoryInfo) {
-            error_log("Directory \"$currentPath\" does not exist in DB");
+            App::getLogger()->log('filemanager_failure', ['cause'=>'Tried to access invalid directory','directory'=>$currentPath]);
             Response::triggerNotFound();
             return;
         }
@@ -33,7 +36,7 @@ class FileManagerController
 
         $accessRights = AccessMiddleware::checkAccess($db, $currentPath, $userId);
         // Render the file manager view
-        \Views\FileManagerView::render($items, $currentPath, $accessRights);
+        FileManagerView::render($items, $currentPath, $accessRights);
     }
 }
 ?>

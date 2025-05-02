@@ -24,6 +24,7 @@ project-root/
 │       └── logos/             # Logos for branding
 ├── src/                       # Source code directory
 │   ├── Backends/              # Dynamically selected backends
+│   │   ├── LogEngine*.php     # Handles logging
 │   │   ├── MailEngine*.php    # Handles mail sending
 │   │   └── StorageEngine*.php # Handles backend storage
 │   ├── Controllers
@@ -34,42 +35,42 @@ project-root/
 │   │   ├── LogoutController.php
 │   │   └── UploadController.php
 │   ├── Core
+│   │   ├── App.php            # Singleton pattern to store $db, $config and $logger
 │   │   ├── Config.php
 │   │   ├── Database.php
 │   │   ├── Request.php
 │   │   ├── Response.php
 │   │   └── Session.php
 │   ├── Middleware
-│   │   └── AccessMiddleware.php
-│   ├── Views/                 # Templates for rendering HTML
-│   │   ├── AdminView.php
-│   │   ├── FileManagerView.php
-│   │   ├── InvitationView.php
-│   │   └── LoginView.php
-│   │   ├── layouts/           # Layout files (e.g., header, footer)
-│   │   ├── file/              # Views for file operations
-│   │   ├── auth/              # Views for authentication
-│   │   └── errors/            # Error pages
-│   │       ├── 404.php
-│   │       ├── 403.php
-│   │       └── 500.php
-│   ├── Core/                  # Core framework-like components
-│   │   ├── Router.php         # Handles routing
-│   │   ├── Request.php        # Manages request data
-│   │   ├── Response.php       # Manages responses
-│   │   ├── Session.php        # Session management
-│   │   └── Config.php         # Configuration loader
-│   └── Middleware/            # Middleware for request/response handling
-│       ├── AuthMiddleware.php # Authentication checks
-│       └── CsrfMiddleware.php # CSRF protection
+│   │   ├── AccessMiddleware.php
+│   │   └── SecurityMiddleware.php
+│   └── Views/                 # Templates for rendering HTML
+│       ├── auth/              # Views for authentication
+│       ├── errors/            # Error pages
+│       ├── file/              # Views for file operations
+│       ├── layouts/           # Layout files (e.g., header, footer)
+│       ├── Modals/            # Bootstrap modals
+|       │   ├── AccessRightsModal.php
+|       │   ├── DeleteConfirmationModal.php
+|       │   ├── InviteModal.php
+|       │   ├── NewFolderModal.php
+|       │   ├── OperationResultModal.php
+|       │   ├── UploadModal.php
+|       │   └── UserGroupModal.php
+│       ├── AdminView.php
+│       ├── FileManagerView.php
+│       ├── InvitationView.php
+│       ├── LoginView.php
+│       ├── layouts/           # Layout files (e.g., header, footer)
+│       ├── file/              # Views for file operations
+│       ├── auth/              # Views for authentication
+│       └── errors/            # Error pages
 ├── storage/                   # Storage directory (not publicly accessible directly)
-│   ├── files/                 # Secure storage for uploaded files
-│   ├── temp/                  # Temporary storage (e.g., for partial TUS uploads)
 │   ├── database/              # SQLite database files
 │   │   └── app.sqlite         # Main SQLite database
-│   ├── logs/                  # Log files
-│   │   └── app.log
-│   └── cache/                 # Cache files
+│   ├── files/                 # Secure storage for uploaded files
+│   └── logs/                  # Log files
+│       └── app.log
 ├── tests/                     # Automated tests
 │   ├── Unit/                  # Unit tests
 │   ├── Feature/               # Feature/integration tests
@@ -103,25 +104,52 @@ When the architecture stabilizes, PHPUnit will likely be used for:
 
 Future developers are encouraged to lay the foundation for testing once core features are complete.
 
-## Security Roadmap
+## Security Architecture
 
-The application currently implements session-based authentication but lacks several security hardening features such as:
+The application now implements several layers of security to defend against common web application threats:
 
-- CSRF protection
-- Rate limiting
-- Brute-force prevention
-- Session hijack detection
+- **CSRF Protection**  
+  A CSRF token is generated per session and injected into all AJAX requests via `X-CSRF-TOKEN` headers. All POST requests are verified globally in `index.php` before reaching controller logic. Tokens are managed via `Session::getCsrfToken()` and validated via `SecurityMiddleware::validateCsrfToken()`.
 
-Middleware stubs (e.g., `CsrfMiddleware.php`) are present, and developers are encouraged to contribute to these areas as the project matures.
+- **Brute-force Protection**  
+  Login attempts are rate-limited per IP using **APCu in-memory counters**. Configuration is hardcoded (5 attempts per 5 minutes). If APCu is unavailable, the app triggers a fatal error to avoid silent exposure.
+
+- **Anti-Enumeration**  
+  Login flow avoids leaking user presence. The two-step login screen always advances to password input, regardless of user existence, and response timing is normalized.
+
+- **Content Security Policy (CSP)**  
+  A strict `Content-Security-Policy` header is emitted from `index.php`.
+
+
+- **Session Hijack Protection**  
+Session management uses strict `HttpOnly`, `Secure`, and `SameSite` attributes. Sessions are validated against inactivity timeout and invalidated on logout.
+
+Future improvements may include:
+- Device/session management
+- Multi-factor authentication
+- OIDC enhancements
 
 ## Logging & Forensic Integrity
 
-At present, logging is minimal and performed via standard PHP `error_log`. A future iteration will introduce a pluggable logging backend (interface-based), supporting granular file operation audit trails.
+The application now includes a **pluggable logging backend system**, abstracted via `LogEngineInterface`. 
 
-All future developers **must ensure**:
-- Users are authenticated before performing file operations.
-- Forensic constraints like SHA256 hashing are not bypassed.
-- Logging (once implemented) is integrated into new file actions (upload, delete, download, etc.).
+Log engines are configured via `.env` using the `log_engine` key.
+
+The logger is globally available via `App::getLogger()` and all controller-level events are expected to log security-sensitive actions, including:
+
+- Login success/failure
+- Logout
+- Uploads / deletions
+- Password changes
+- Group/user permission changes (WIP)
+
+**Forensic constraints:**
+- Every uploaded file is SHA256-hashed at write time
+- File metadata (upload timestamp, user, and origin IP) is persisted in the database
+- File deletion is logged
+- All access control decisions are enforced via middleware (see `AccessMiddleware`)
+
+Developers must **never bypass or disable** these integrity mechanisms. When adding new features, log every user-facing change or file operation.
 
 ## Authorization logic
 
@@ -276,12 +304,19 @@ Storage engine can be :
 - Amazon S3
 - Azure Blob storage
 
+### Logging
+
+- Syslog
+- File
+- Stderr : For Docker and containerized deployments
+
 ## Backend Extensibility
 
 Backends for storage and mail are dynamically chosen based on `.env` variables.
 
 - **Mail backends** must implement `MailEngineInterface`
 - **Storage backends** must implement `StorageEngineInterface`
+- **Logging backends** must implement `LogEngineInterface`
 
 To add a new backend:
 1. Create a class in `src/Backends/` implementing the appropriate interface.
@@ -293,8 +328,6 @@ Each backend is responsible for parsing its configuration from the `.env` file.
 ## Known Limitations / To-Do
 
 - No migration strategy is implemented for the database
-- Logging is not yet pluggable or centralized
-- Security middleware stubs (e.g., CSRF) need full implementation
 - No automated tests currently in place
 
 ## Contributing

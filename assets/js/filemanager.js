@@ -1,6 +1,6 @@
 // assets/js/filemanager.js
 
-import { showResultMessage, initGroupTypeahead, updatePassword, escapeHtml } from './utils.js';
+import { showResultMessage, initGroupTypeahead, updatePassword, escapeHtml, getCsrfToken } from './utils.js';
 
 let $groupAccessRowTemplate = null;
 
@@ -103,6 +103,7 @@ function initDropzone() {
         parallelChunkUploads: false,
         retryChunks: true,
         retryChunksLimit: 3,
+        headers: { 'X-CSRF-TOKEN': getCsrfToken() },
 
         accept: function (file, done) {
             const cwd = $('#cwd').val();

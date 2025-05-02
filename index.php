@@ -13,6 +13,9 @@ require_once BASE_PATH . '/vendor/autoload.php';
 use Core\Config;
 use Core\Database;
 use Core\Session;
+use Core\App;
+use Core\Response;
+use Backends\LogEngineFactory;
 use Middleware\SecurityMiddleware;
 
 // Load configuration
@@ -20,6 +23,18 @@ $config = Config::load(ENV_FILE);
 
 // Initialize database
 $db = Database::initialize(STORAGE_PATH . '/database/app.sqlite');
+
+// Initialize logger
+$logEngine = LogEngineFactory::create($config);
+if (!$logEngine->healthCheck()) {
+    Response::triggerSystemError();
+    return;
+}
+
+// Globally available variables through singleton pattern
+App::setConfig($config);
+App::setDb($db);
+App::setLogger($logEngine);
 
 // Start session management
 Session::start();
@@ -44,6 +59,9 @@ if ($requestUri !== '/login') {
         exit;
     }
 }
+
+// CSP
+header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self';");
 
 // CSRF protection
 $csrfExemptRoutes = ['/login'];

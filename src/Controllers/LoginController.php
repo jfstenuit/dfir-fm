@@ -6,7 +6,9 @@ use Core\Config;
 use Core\Database;
 use Core\Request;
 use Core\Session;
+use Core\App;
 use Middleware\SecurityMiddleware;
+use Views\LoginView;
 
 use PDO;
 
@@ -27,8 +29,7 @@ class LoginController
 
             // Case B : standard login form
             $redirect = isset($_GET['redirect']) ? filter_var($_GET['redirect'], FILTER_SANITIZE_URL) : '';
-            require_once SRC_PATH . '/Views/LoginView.php';
-            \Views\LoginView::render($redirect);
+            LoginView::render($redirect);
         } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Case C : process submited login form
             $action = $_POST['action'] ?? null;
@@ -47,7 +48,7 @@ class LoginController
     {
         // Validate the token for the provided email
         $stmt = $db->prepare("
-            SELECT u.id AS user_id, u.invitation_token, u.token_expiry
+            SELECT u.id AS user_id, u.username, u.invitation_token, u.token_expiry
             FROM users u
             WHERE u.username = :email
         ");
@@ -56,6 +57,7 @@ class LoginController
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$user) {
+            App::getLogger()->log('login_token_failure', ['cause'=>'Invalid token']);
             http_response_code(400);
             echo "Invalid or expired token.";
             return;
@@ -63,10 +65,15 @@ class LoginController
 
         // Check token validity and expiry
         if ($user['invitation_token'] !== $token || strtotime($user['token_expiry']) < time()) {
+            App::getLogger()->log('login_token_failure', ['cause'=>'Expired token']);
             http_response_code(400);
             echo "Invalid or expired token.";
             return;
         }
+
+        App::getLogger()->log('login_token_success', [
+            'username' => $email
+        ]);
 
         // Check if the directory exists
         $stmt = $db->prepare("
@@ -85,7 +92,7 @@ class LoginController
         }
 
         // Authenticate the user
-        Session::authenticate($user['user_id']);
+        Session::authenticate($user);
 
         // Redirect to the directory
         $redirectPath = dirname($_SERVER['REQUEST_URI']) . '/?p=' . urlencode($directory);
@@ -151,6 +158,7 @@ class LoginController
         $redirect = isset($_POST['redirect']) ? filter_var($_POST['redirect'], FILTER_SANITIZE_URL) : null;
     
         if (empty($username) || empty($password)) {
+            App::getLogger()->log('login_password_failure', ['cause'=>'Empty username or password']);
             echo json_encode(['success' => false, 'message' => 'Username and password are required.']);
             return;
         }
@@ -159,26 +167,29 @@ class LoginController
         $key = 'login_attempts_' . md5($ip);
 
         if (!SecurityMiddleware::throttle($key)) {
+            App::getLogger()->log('login_password_failure', ['cause'=>'Brute force attempt']);
             echo json_encode(['success' => false, 'message' => 'Too many login attempts. Try again later.']);
             return;
         }
 
-        $stmt = $db->prepare("SELECT id, password FROM users WHERE username = :username");
+        $stmt = $db->prepare("SELECT id as user_id, password, username FROM users WHERE username = :username");
         $stmt->bindParam(':username', $username, PDO::PARAM_STR);
         $stmt->execute();
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
         if ($user && password_verify($password, $user['password'])) {
-            apcu_delete($key); // reset counter on successful login
-            Session::authenticate($user['id']);
-    
+            SecurityMiddleware::clearThrottle($key);
+            Session::authenticate($user);
+
+            App::getLogger()->log('login_password_success', []);
+
             echo json_encode([
                 'success' => true,
                 'redirect' => self::sanitizeRedirect($redirect)
             ]);
             return;
         } else {
-            apcu_store($key, $attempts + 1, 300); // expire after 5 min
+            App::getLogger()->log('login_password_failure', ['cause'=>'Invalid login or password']);
             echo json_encode(['success' => false, 'message' => 'Invalid username or password.']);
         }
     }

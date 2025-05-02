@@ -24,15 +24,28 @@ class Session
         return isset($_SESSION['user_id']) && !empty($_SESSION['user_id']);
     }
 
-    public static function authenticate($userId)
+    public static function authenticate($user)
     {
-        $_SESSION['user_id'] = $userId;
+        $_SESSION['user_id'] = $user['user_id'];
+        $_SESSION['username'] = $user['username'];
         $_SESSION['last_activity'] = time();
     }
 
     public static function getUserId(): ?int
     {
         return isset($_SESSION['user_id']) ? (int) $_SESSION['user_id'] : null;
+    }
+
+    public static function getUser(): ?array
+    {
+        if (isset($_SESSION['user_id'], $_SESSION['username'])) {
+            return [
+                'user_id' => (int) $_SESSION['user_id'],
+                'username' => $_SESSION['username']
+            ];
+        }
+    
+        return null;
     }
 
     public static function logout()

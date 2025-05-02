@@ -6,6 +6,7 @@ use Core\Session;
 use Core\Database;
 use Core\Request;
 use Core\Response;
+use Core\App;
 use Backends\StorageEngineFactory;
 use Middleware\AccessMiddleware;
 use PDO;
@@ -26,7 +27,7 @@ class UploadController
         // Check that the current directory exist
         $directoryInfo = AccessMiddleware::getDirectoryInfo($db, $currentDirectory);
         if (!$directoryInfo) {
-            error_log("Directory \"$currentDirectory\" does not exist in DB");
+            App::getLogger()->log('upload_failure', ['cause'=>'Invalid directory requested']);
             echo json_encode(['status' => 'error', 'message' => 'Directory does not exist', 'hasPermission' => false]);
             return;
         }
@@ -34,8 +35,7 @@ class UploadController
         // Verify user has access to the current directory
         $accessRights = AccessMiddleware::checkAccess($db, $currentDirectory, $userId);
         if (! ( $accessRights['can_write'] || $accessRights['can_upload'])) {
-            // TODO: logging "Access denied"
-            error_log('Access denied for upload : '.print_r($accessRights,true));
+            App::getLogger()->log('upload_failure', ['cause'=>'Access denied']);
             echo json_encode(['status' => 'error', 'message' => 'Not authorized', 'hasPermission' => false]);
             return;
         }
@@ -49,6 +49,7 @@ class UploadController
 
         $storageEngine = StorageEngineFactory::create($config);
         if (!$storageEngine->healthCheck()) {
+            error_log("Failed to get a handle on a Storage Engine");
             Response::triggerSystemError();
             return;
         }
@@ -63,6 +64,7 @@ class UploadController
 
         // Validate fields
         if (!$uuid || $chunkIndex === null || $chunkCount === null || !$fileSize) {
+            App::getLogger()->log('upload_failure', ['cause'=>'Invalid upload parameters']);
             echo json_encode(['status' => 'error', 'message' => 'Invalid upload parameters.']);
             return;
         }
@@ -75,8 +77,8 @@ class UploadController
 
         $hashContext = null;
         if (!$upload) {
-            error_log("No entry in upload table : this is a new upload");
             // This is a new upload - create entry in DB, create storage
+            App::getLogger()->log('upload_start', ['file'=> $originalFileName, 'directory'=> $currentDirectory]);
             $storagePath = rtrim($currentDirectory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $originalFileName;
 
             $stmt = $db->prepare("
@@ -98,9 +100,9 @@ class UploadController
             $hashContext = hash_init('sha256');
             $storageEngine->createElement($storagePath);
         } else {
-            error_log("Entry found in upload table : this is a new chunk of an existing upload");
             // Check if the chunk index is out of sequence
             if ($chunkIndex !== (int)$upload['last_chunk_index'] + 1) {
+                App::getLogger()->log('upload_failure', ['cause'=>'Chunk out of sequence']);
                 error_log("Chunk out of sequence : $chunkIndex (expected ".((int)$upload['last_chunk_index'] + 1).")");
                 echo json_encode(['status' => 'error', 'message' => 'Chunk out of sequence.']);
                 return;
@@ -127,7 +129,6 @@ class UploadController
             SET last_chunk_index = :last_chunk_index, hash_state = :hash_state, last_update = CURRENT_TIMESTAMP
             WHERE uuid = :uuid
         ");
-        error_log("UPDATE uploads SET last_chunk_index = $chunkIndex, last_update = CURRENT_TIMESTAMP WHERE uuid = $uuid");
         $stmt->bindParam(':last_chunk_index', $chunkIndex, PDO::PARAM_INT);
         $stmt->bindParam(':hash_state', $hashState, PDO::PARAM_STR);
         $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
@@ -135,7 +136,6 @@ class UploadController
 
         // If all chunks are uploaded, create entry
         if ($chunkIndex == $chunkCount - 1) {
-            error_log("All chunks uploaded - create entry");
             $finalFileSize  = $storageEngine->getSize($upload['storage_path']);
             $checksum = hash_final($hashContext);
             // $finfo = finfo_open(FILEINFO_MIME_TYPE);
@@ -169,6 +169,8 @@ class UploadController
             ");
             $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
             $stmt->execute();
+
+            App::getLogger()->log('upload_completed', ['file'=> $originalFileName, 'directory'=> $currentDirectory, 'size'=>$fileSize, 'sha256'=>$checksum]);
 
             echo json_encode(['status' => 'success', 'message' => 'File uploaded successfully.',
                 'file' => [ 'name' => $originalFileName, 'size' => $fileSize, 'sha256' => $checksum,

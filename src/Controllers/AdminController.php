@@ -5,6 +5,7 @@ namespace Controllers;
 use Middleware\AccessMiddleware;
 use Middleware\SecurityMiddleware;
 use Core\Request;
+use Core\App;
 use Backends\MailEngineFactory;
 use Backends\StorageEngineFactory;
 use Views\InvitationView;
@@ -16,15 +17,6 @@ class AdminController
     public static function handle($config, $db)
     {
         $action = isset($_POST['a']) ? trim($_POST['a']) ?? '' : '';
-
-        // Enforce CSRF on all POST requests
-        if ($_SERVER['REQUEST_METHOD'] === 'POST' && !SecurityMiddleware::validateCsrfToken()) {
-            header('Content-Type: application/json');
-            http_response_code(403);
-            echo json_encode(['success' => false, 'message' => 'Invalid CSRF token']);
-            return;
-        }
-
         if ($action === "createFolder") {
             self::createDirectory($config,$db);
         } elseif ($action === "deleteItem") {
@@ -46,7 +38,7 @@ class AdminController
         } elseif ($action === "listUsers") {
             self::listUsers($config, $db);
         } elseif ($action === 'deleteUser') {
-            self::deleteUser($db);
+            self::deleteUser($config,$db);
         } elseif ($action === "addUserToGroup") {
             self::addUserToGroup($config, $db);
         } elseif ($action === "removeUserFromGroup") {
@@ -159,12 +151,15 @@ class AdminController
             $mailEngine->send($email, 'You have been invited to contribute on ' . $baseUrl, $mailBody);
         }
     
+        App::getLogger()->log('user_invited', ['invited_user'=>$email]);
+
         echo json_encode(['success' => true, 'message' => 'Contributor invited']);
         return;
     }
 
     public static function updatePassword($config, $db) {
         header('Content-Type: application/json');
+        error_log('TODO code reached !');
     }
 
     public static function deleteItem($config,$db) {
@@ -210,7 +205,9 @@ class AdminController
             $stmt = $db->prepare("DELETE FROM directories WHERE id = :id");
             $stmt->bindParam(':id', $itemId, PDO::PARAM_INT);
             $stmt->execute();
-    
+
+            App::getLogger()->log('directory_deleted', ['directory'=>$directoryInfo['path']]);
+
             echo json_encode(['success' => true, 'message' => 'Directory deleted successfully']);
         } elseif ($itemType === 'f') {
             $fileInfo = AccessMiddleware::getFileInfo($db,$itemId);;
@@ -244,7 +241,9 @@ class AdminController
             $stmt = $db->prepare("DELETE FROM files WHERE id = :id");
             $stmt->bindParam(':id', $itemId, PDO::PARAM_INT);
             $stmt->execute();
-    
+
+            App::getLogger()->log('file_deleted', ['file'=>$path]);
+
             echo json_encode(['success' => true, 'message' => 'File deleted successfully']);
         }
     }
@@ -318,6 +317,8 @@ class AdminController
             ':created_from' => $remoteIp
         ]);
         $folderId = $db->lastInsertId();
+
+        App::getLogger()->log('directory_created', ['directory'=>$newDirPath]);
 
         // Directory created successfully
         echo json_encode([
@@ -470,6 +471,8 @@ class AdminController
                 ':directory_id' => $directoryId
             ]);
 
+            App::getLogger()->log('group_created', ['group'=>$name]);
+
             echo json_encode(['success' => true]);
 
         } catch (\PDOException $e) {
@@ -530,7 +533,9 @@ class AdminController
                 ':group_id' => $groupId,
                 ':directory_id' => $directoryId
             ]);
-    
+
+            App::getLogger()->log('access_granted', ['group'=>$group, 'directory'=>$cwd, 'right'=>$column, 'value'=>$value]);
+
             echo json_encode(['success' => true]);
     
         } catch (\PDOException $e) {
@@ -567,7 +572,9 @@ class AdminController
     
             $stmt = $db->prepare("DELETE FROM access_rights WHERE group_id = :group_id AND directory_id = :directory_id");
             $stmt->execute([':group_id' => $groupId, ':directory_id' => $directoryId]);
-    
+
+            App::getLogger()->log('access_revoked', ['group'=>$group, 'directory'=>$cwd]);
+
             echo json_encode(['success' => true]);
     
         } catch (\PDOException $e) {
@@ -633,7 +640,7 @@ class AdminController
         }
 
         // Lookup user by email (username is email unless it's 'admin')
-        $stmt = $db->prepare("SELECT id FROM users WHERE email = :email OR username = :email");
+        $stmt = $db->prepare("SELECT id FROM users WHERE username = :email");
         $stmt->execute([':email' => $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -651,6 +658,7 @@ class AdminController
         $success = $stmt->execute([':id' => $user['id']]);
 
         if ($success) {
+            App::getLogger()->log('user_deleted', ['target_user'=>$email]);
             echo json_encode(['success' => true]);
         } else {
             echo json_encode(['success' => false, 'message' => 'Failed to delete user.']);
@@ -710,6 +718,8 @@ class AdminController
         $stmt = $db->prepare("INSERT INTO user_group (user_id, group_id) VALUES (:uid, :gid)");
         $success = $stmt->execute([':uid' => $userId, ':gid' => $groupId]);
     
+        App::getLogger()->log('group_user_added', ['group'=>$groupName , 'target_user'=>$email]);
+
         echo json_encode(['success' => $success]);
     }
 
@@ -726,7 +736,7 @@ class AdminController
         }
     
         // Lookup user
-        $stmt = $db->prepare("SELECT id FROM users WHERE email = :email OR username = :email");
+        $stmt = $db->prepare("SELECT id FROM users WHERE username = :email");
         $stmt->execute([':email' => $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -753,6 +763,7 @@ class AdminController
         ]);
     
         if ($success) {
+            App::getLogger()->log('group_user_removed', ['group'=>$groupName, 'target_user'=>$email]);
             echo json_encode(['success' => true]);
         } else {
             echo json_encode(['success' => false, 'message' => 'Failed to remove user from group.']);
@@ -783,6 +794,8 @@ class AdminController
         // Lock the user
         $stmt = $db->prepare("UPDATE users SET password = '!', token_expiry = 0 WHERE id = :id");
         $success = $stmt->execute([':id' => $user['id']]);
+
+        App::getLogger()->log('user_locked', ['locked_user'=>$email]);
 
         echo json_encode(['success' => $success]);
     }
@@ -866,6 +879,8 @@ class AdminController
         // Proceed to delete (will cascade in access_rights, user_group)
         $stmt = $db->prepare("DELETE FROM groups WHERE id = :id");
         $success = $stmt->execute([':id' => $group['id']]);
+
+        App::getLogger()->log('group_deleted', ['group'=>$groupName]);
 
         echo json_encode(['success' => $success]);
     }
