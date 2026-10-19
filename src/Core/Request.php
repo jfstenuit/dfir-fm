@@ -11,6 +11,33 @@ class Request
     private static array $trustedProxies = [];
 
     /**
+     * Set from the `force_https` configuration key: the site is only served
+     * over HTTPS, even if PHP doesn't see it (TLS terminated by a proxy).
+     */
+    private static bool $forceHttps = false;
+
+    /**
+     * Parse the `force_https` setting (true/false, yes/no, on/off, 1/0;
+     * empty means false).
+     *
+     * @throws \InvalidArgumentException on an unrecognised value
+     */
+    public static function configureForceHttps(?string $setting): void
+    {
+        $setting = trim($setting ?? '');
+        if ($setting === '') {
+            self::$forceHttps = false;
+            return;
+        }
+
+        $value = filter_var($setting, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        if ($value === null) {
+            throw new \InvalidArgumentException("Invalid force_https value: '$setting' (expected true or false)");
+        }
+        self::$forceHttps = $value;
+    }
+
+    /**
      * Parse the `trusted_proxies` setting: a comma-separated list of IPv4/IPv6
      * addresses or CIDR ranges. Empty means no trusted proxy: the client IP is
      * REMOTE_ADDR, as set by the web server (directly, or by mod_remoteip).
@@ -87,11 +114,15 @@ class Request
     }
 
     /**
-     * Whether the client connection uses HTTPS. X-Forwarded-Proto is only
-     * honoured when the request comes from a trusted proxy.
+     * Whether the client connection uses HTTPS: always when `force_https` is
+     * set, otherwise as seen by PHP. X-Forwarded-Proto is only honoured when
+     * the request comes from a trusted proxy.
      */
     public static function isHttps(): bool
     {
+        if (self::$forceHttps) {
+            return true;
+        }
         if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
             return true;
         }

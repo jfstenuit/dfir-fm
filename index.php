@@ -28,10 +28,11 @@ use Middleware\SecurityMiddleware;
 // Load configuration
 $config = Config::load(ENV_FILE);
 
-// Client IP resolution: refuse to run with an invalid proxy configuration
-// rather than silently trusting (or ignoring) the wrong addresses
+// Client IP and HTTPS detection: refuse to run with an invalid configuration
+// rather than silently trusting (or ignoring) the wrong values
 try {
     Request::configureTrustedProxies($config['trusted_proxies'] ?? '');
+    Request::configureForceHttps($config['force_https'] ?? '');
 } catch (\InvalidArgumentException $e) {
     error_log('DFIR FM configuration error: ' . $e->getMessage());
     Response::triggerSystemError();

@@ -48,3 +48,6 @@ composer.phar
 # AI assistant
 .claude
 
+# Storage location
+storage
+
