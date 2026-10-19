@@ -1,4 +1,8 @@
 {
+    "name": "chryseis/dfir-fm",
+    "description": "DFIR File Manager: secure evidence file exchange with access control, hashing and audit logging",
+    "type": "project",
+    "license": "AGPL-3.0-or-later",
     "autoload": {
         "psr-4": {
             "Backends\\": "src/Backends/",
@@ -9,7 +13,16 @@
             "Views\\": "src/Views/"
         }
     },
+    "config": {
+        "platform": {
+            "php": "8.4"
+        }
+    },
     "require": {
+        "php": ">=8.4",
+        "ext-apcu": "*",
+        "ext-curl": "*",
+        "ext-pdo_sqlite": "*",
         "components/jquery": "^3.7",
         "components/bootstrap": "^4.6",
         "components/font-awesome": "^6.5",
