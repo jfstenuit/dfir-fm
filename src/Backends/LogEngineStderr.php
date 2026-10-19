@@ -4,10 +4,7 @@ namespace Backends;
 
 class LogEngineStderr implements LogEngineInterface {
     public function log(string $action, array $context = []): void {
-        $entry = array_merge([
-            'ts' => gmdate('c'),
-            'action' => $action
-        ], $context);
+        $entry = LogEntry::build($action, $context);
         file_put_contents('php://stderr', json_encode($entry) . PHP_EOL);
     }
 

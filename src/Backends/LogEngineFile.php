@@ -2,9 +2,6 @@
 // src/Backends/LogEngineFile.php
 namespace Backends;
 
-use Core\Session;
-use Core\Request;
-
 class LogEngineFile implements LogEngineInterface {
     private string $filePath;
     private string $format;
@@ -15,16 +12,7 @@ class LogEngineFile implements LogEngineInterface {
     }
 
     public function log(string $action, array $context = []): void {
-        $sessionUser = Session::getUser();
-        $ip = Request::getClientIp();
-
-        $entry = array_merge([
-            'ts' => gmdate('c'),
-            'action' => $action,
-        ], $context);
-
-        $entry['ip'] = $entry['ip'] ?? $ip;
-        $entry['username'] = $entry['username'] ?? ($sessionUser['username'] ?? null);
+        $entry = LogEntry::build($action, $context);
 
         $line = $this->format === 'csv'
             ? $this->toCsv($entry)

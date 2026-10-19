@@ -10,10 +10,7 @@ class LogEngineSyslog implements LogEngineInterface {
     }
 
     public function log(string $action, array $context = []): void {
-        $entry = array_merge([
-            'ts' => gmdate('c'),
-            'action' => $action
-        ], $context);
+        $entry = LogEntry::build($action, $context);
         syslog(LOG_INFO, json_encode($entry, JSON_UNESCAPED_SLASHES));
     }
 

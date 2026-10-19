@@ -119,7 +119,17 @@ The application now implements several layers of security to defend against comm
   A CSRF token is generated per session and injected into all AJAX requests via `X-CSRF-TOKEN` headers. All POST requests are verified globally in `index.php` before reaching controller logic. Tokens are managed via `Session::getCsrfToken()` and validated via `SecurityMiddleware::validateCsrfToken()`.
 
 - **Brute-force Protection**  
-  Login attempts are rate-limited per IP using **APCu in-memory counters**. Configuration is hardcoded (5 attempts per 5 minutes). If APCu is unavailable, the app triggers a fatal error to avoid silent exposure.
+  Login attempts are rate-limited per client IP (see *Client IP resolution* below) using **APCu in-memory counters**. Configuration is hardcoded (5 attempts per 5 minutes). If APCu is unavailable, the app triggers a fatal error to avoid silent exposure.
+
+- **Client IP resolution**  
+  `Request::getClientIp()` is the only source of the client address, used for rate limiting, audit logs and forensic records (`uploaded_from`, `created_from`). It is controlled by the `trusted_proxies` setting: a comma-separated list of IPv4/IPv6 addresses or CIDR ranges.
+  - **Empty (default):** the client is `REMOTE_ADDR`. Use this for direct connections and for **Apache with mod_remoteip**, which already rewrites `REMOTE_ADDR`. Configure mod_remoteip with explicit `RemoteIPTrustedProxy`/`RemoteIPInternalProxy` addresses, never a range that includes untrusted hosts.
+  - **Set:** only when `REMOTE_ADDR` is in the list, `X-Forwarded-For` is walked **from right to left**, skipping trusted proxies; the first untrusted address is the client. Entries further left were written by the client and are never trusted. If every entry is a trusted proxy, the leftmost is used. Ports (`a.b.c.d:port`, `[v6]:port`) are stripped and IPv4-mapped IPv6 addresses are normalised to IPv4.
+  - `Client-IP` is never read. `X-Forwarded-Proto` (`Request::isHttps()`) is only honoured from a trusted proxy.
+  - Using mod_remoteip *and* `trusted_proxies` together is harmless: after mod_remoteip, `REMOTE_ADDR` is the client, which isn't a trusted proxy, so the header isn't read twice.
+  - An invalid entry stops the application (HTTP 500, reason in the PHP error log) instead of running with a wrong trust list.
+  - Examples: Cloudflare Tunnel with `cloudflared` on the same host: `127.0.0.1, ::1`. Reverse proxy on a Docker network: `172.16.0.0/12`.
+  - Log entries carry `ip` (the client) and, when a trusted proxy relayed the request, `peer_ip` (the proxy). The record is built once in `Backends\LogEntry` for all log engines.
 
 - **Anti-Enumeration**  
   Login flow avoids leaking user presence. The two-step login screen always advances to password input, regardless of user existence, and response timing is normalized.

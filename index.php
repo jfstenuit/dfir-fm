@@ -15,11 +15,22 @@ use Core\Database;
 use Core\Session;
 use Core\App;
 use Core\Response;
+use Core\Request;
 use Backends\LogEngineFactory;
 use Middleware\SecurityMiddleware;
 
 // Load configuration
 $config = Config::load(ENV_FILE);
+
+// Client IP resolution: refuse to run with an invalid proxy configuration
+// rather than silently trusting (or ignoring) the wrong addresses
+try {
+    Request::configureTrustedProxies($config['trusted_proxies'] ?? '');
+} catch (\InvalidArgumentException $e) {
+    error_log('DFIR FM configuration error: ' . $e->getMessage());
+    Response::triggerSystemError();
+    return;
+}
 
 // Initialize database
 $db = Database::initialize(STORAGE_PATH . '/database/app.sqlite');
