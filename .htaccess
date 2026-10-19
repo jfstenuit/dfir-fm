@@ -4,7 +4,7 @@ RewriteEngine On
 # whatever the URL prefix the application is installed under.
 
 # Prevent access to sensitive directories and files
-RewriteRule ^(storage|src|bin|docker)(/|$) - [R=404,L]
+RewriteRule ^(storage|src|bin|docker|tests)(/|$) - [R=404,L]
 RewriteRule (^|/)\. - [R=404,L]
 
 # assets/ and vendor/: serve existing static files only. Anything else there

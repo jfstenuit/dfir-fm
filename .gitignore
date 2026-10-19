@@ -32,6 +32,9 @@ Thumbs.db
 # Composer artifacts
 composer.phar
 
+# PHPUnit
+/.phpunit.cache/
+
 # Backup files
 *.bak
 *.swp
@@ -44,6 +47,7 @@ composer.phar
 # Miscellaneous
 *.log
 .env
+.phpunit.cache
 
 # AI assistant
 .claude

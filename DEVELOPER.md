@@ -29,6 +29,11 @@ project-root/
 │       ├── admin-users.js     # Admin: user management
 │       ├── admin-groups.js    # Admin: group management
 │       └── login.js           # Login page (classic script)
+├── tests/                     # PHPUnit tests (see "Testing")
+│   ├── Unit/                  # Pure logic, no server
+│   ├── Feature/               # HTTP-level, isolated app instance per test
+│   └── Support/               # TestServer, HttpClient, router for php -S
+├── phpunit.xml.dist           # PHPUnit configuration
 ├── bin/                       # CLI tools (not web-accessible)
 │   └── create-admin.php       # Create the first / an additional administrator
 ├── docker/                    # Container deployment
@@ -103,13 +108,23 @@ To debug:
 
 ## Testing
 
-This project is in early development. No automated testing framework is currently in place.
+Tests use PHPUnit (`require-dev`). Run them with Composer, which enables APCu for the CLI:
 
-When the architecture stabilizes, PHPUnit will likely be used for:
-- Unit testing of backends and core logic
-- Integration testing for controllers
+```bash
+composer test            # everything
+composer test:unit       # fast, no server
+composer test:feature    # HTTP-level, ~1 min
+```
 
-Future developers are encouraged to lay the foundation for testing once core features are complete.
+- **`tests/Unit/`**: pure logic. Client IP resolution, config parsing, `Content-Disposition`, Range parsing, storage path validation, backend factories, schema and migrations, admin checks, throttle settings.
+- **`tests/Feature/`**: the application over HTTP. Each test starts a fresh, isolated instance on PHP's built-in server (`Tests\Support\TestServer`) in a temporary directory, with its own `.env`, SQLite database, storage, log file and APCu counters. The project's own `.env`, database and storage are never touched.
+  - Fixtures: an admin created through `bin/create-admin.php`, a regular user `bob@test.local` and the root directory.
+  - `tests/Support/router.php` mirrors `.htaccess` for the built-in server, so `.htaccess` itself still needs checking on a real Apache.
+  - `Tests\Support\HttpClient` behaves like a browser: it keeps cookies and handles the CSRF token and login form.
+  - Every feature test fails if the server logged a PHP warning, notice, deprecation or fatal error.
+- Security fixes come with a test that fails on the vulnerable code (e.g. `LoginRateLimitTest` for the `X-Forwarded-For` bypass, `AdminAuthorizationTest` for the missing admin guard).
+
+Production installs should use `composer install --no-dev`, which leaves PHPUnit out of `vendor/`.
 
 ## Security Architecture
 
@@ -374,7 +389,7 @@ Each backend is responsible for parsing its configuration from the `.env` file.
 ## Known Limitations / To-Do
 
 - Database migrations are minimal (`PRAGMA user_version` steps in `Database::migrate()`), with no down-migrations
-- No automated tests currently in place
+- No continuous integration yet: run `composer test` before committing
 
 ## Contributing
 
