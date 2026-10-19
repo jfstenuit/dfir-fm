@@ -70,7 +70,7 @@ class AdminController
     public static function inviteUser($config, $db) {
         header('Content-Type: application/json');
 
-        $email = trim($_POST['email']) ?? '';
+        $email = trim((string)($_POST['email'] ?? ''));
         $cwd = trim($_POST['cwd'] ?? '/');
         $userId = $_SESSION['user_id'];
         $sendLink = isset($_POST['sendLink']) && $_POST['sendLink'] === 'true';
@@ -156,11 +156,34 @@ class AdminController
             $mailBody = InvitationView::render($email, $invitationToken, $cwd, $baseUrl);
     
             // Send email
-            $mailEngine = MailEngineFactory::create($config);
-            $mailEngine->send($email, 'You have been invited to contribute on ' . $baseUrl, $mailBody);
+            $mailError = null;
+            try {
+                $mailEngine = MailEngineFactory::create($config);
+                if (!$mailEngine->send($email, 'You have been invited to contribute on ' . $baseUrl, $mailBody)) {
+                    $mailError = $mailEngine->lastError() ?? 'unknown error';
+                }
+            } catch (\Exception $e) {
+                $mailError = $e->getMessage();
+            }
+
+            App::getLogger()->log('user_invited', ['invited_user' => $email, 'invitation_sent' => $mailError === null]);
+
+            if ($mailError !== null) {
+                // Details (SMTP replies, configuration problems) go to the log only
+                App::getLogger()->log('mail_send_failure', [
+                    'recipient' => $email,
+                    'mail_engine' => $config['mail_engine'] ?? 'mail',
+                    'error' => $mailError,
+                ]);
+                echo json_encode(['success' => false, 'message' => 'Contributor added, but the invitation e-mail could not be sent. See the application log.']);
+                return;
+            }
+
+            echo json_encode(['success' => true, 'message' => 'Invitation sent']);
+            return;
         }
-    
-        App::getLogger()->log('user_invited', ['invited_user'=>$email]);
+
+        App::getLogger()->log('user_invited', ['invited_user' => $email, 'invitation_sent' => false]);
 
         echo json_encode(['success' => true, 'message' => 'Contributor invited']);
         return;

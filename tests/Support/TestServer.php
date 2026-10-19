@@ -39,9 +39,12 @@ final class TestServer
         $this->root = sys_get_temp_dir() . '/dfirfm-test-' . bin2hex(random_bytes(6));
         mkdir($this->root . '/storage/files', 0777, true);
         mkdir($this->root . '/bin');
+        mkdir($this->root . '/sendmail');
 
         copy("$project/index.php", "$this->root/index.php");
-        copy("$project/bin/create-admin.php", "$this->root/bin/create-admin.php");
+        foreach (glob("$project/bin/*.php") as $script) {
+            copy($script, "$this->root/bin/" . basename($script));
+        }
         symlink("$project/assets", "$this->root/assets");
         symlink("$project/vendor", "$this->root/vendor");
 
@@ -66,7 +69,7 @@ final class TestServer
     public function start(): self
     {
         $command = [
-            PHP_BINARY, '-d', 'apc.enable_cli=1', '-d', 'display_errors=0', '-d', 'log_errors=1',
+            PHP_BINARY, ...$this->phpOptions(), '-d', 'display_errors=0', '-d', 'log_errors=1',
             '-S', "127.0.0.1:$this->port", '-t', $this->root, __DIR__ . '/router.php',
         ];
         $this->process = proc_open($command, [
@@ -75,17 +78,35 @@ final class TestServer
             2 => ['file', "$this->root/server.log", 'a'],
         ], $pipes);
 
+        self::waitForPort($this->port, fn() => $this->stop());
+        return $this;
+    }
+
+    /**
+     * PHP options for the server and the CLI scripts. mail() goes to
+     * fake-sendmail.php, so mail_engine=mail never delivers real mail.
+     */
+    private function phpOptions(): array
+    {
+        $sendmail = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/fake-sendmail.php')
+            . ' ' . escapeshellarg("$this->root/sendmail");
+        return ['-d', 'apc.enable_cli=1', '-d', "sendmail_path=$sendmail"];
+    }
+
+    /** Wait until something listens on a local port; on timeout, clean up and fail */
+    public static function waitForPort(int $port, callable $onTimeout): void
+    {
         $deadline = microtime(true) + 10;
         while (microtime(true) < $deadline) {
-            $socket = @fsockopen('127.0.0.1', $this->port, $errno, $errstr, 0.1);
+            $socket = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.1);
             if ($socket) {
                 fclose($socket);
-                return $this;
+                return;
             }
             usleep(50_000);
         }
-        $this->stop();
-        throw new \RuntimeException("Test server did not start on port $this->port");
+        $onTimeout();
+        throw new \RuntimeException("Nothing started listening on port $port");
     }
 
     public function stop(): void
@@ -151,12 +172,36 @@ final class TestServer
     /** Run bin/create-admin.php in the test instance */
     public function runCreateAdmin(string ...$args): array
     {
-        $process = proc_open([PHP_BINARY, "$this->root/bin/create-admin.php", ...$args], [
+        return $this->runBin('create-admin.php', ...$args);
+    }
+
+    /**
+     * Run a bin/ script in the test instance
+     * @return array{exit:int, stdout:string, stderr:string}
+     */
+    public function runBin(string $script, string ...$args): array
+    {
+        $process = proc_open([PHP_BINARY, ...$this->phpOptions(), "$this->root/bin/$script", ...$args], [
             1 => ['pipe', 'w'], 2 => ['pipe', 'w'],
         ], $pipes);
         $stdout = stream_get_contents($pipes[1]);
         $stderr = stream_get_contents($pipes[2]);
         return ['exit' => proc_close($process), 'stdout' => $stdout, 'stderr' => $stderr];
+    }
+
+    /**
+     * Messages handed to sendmail (mail_engine=mail) by the server or the CLI scripts
+     * @return list<array{argv:list<string>, message:string}>
+     */
+    public function sentMail(): array
+    {
+        $files = glob("$this->root/sendmail/*.json") ?: [];
+        sort($files);
+        return array_map(function ($f) {
+            $sent = json_decode(file_get_contents($f), true, flags: JSON_THROW_ON_ERROR);
+            $sent['message'] = base64_decode($sent['message']);
+            return $sent;
+        }, $files);
     }
 
     /** @return list<array> application log entries (log_engine=file, jsonl) */
@@ -198,7 +243,7 @@ final class TestServer
            ->execute([':u' => self::BOB, ':p' => password_hash(self::BOB_PASSWORD, PASSWORD_DEFAULT)]);
     }
 
-    private static function freePort(): int
+    public static function freePort(): int
     {
         $socket = stream_socket_server('tcp://127.0.0.1:0');
         $port = (int)substr(strrchr(stream_socket_get_name($socket, false), ':'), 1);

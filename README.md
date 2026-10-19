@@ -49,6 +49,10 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
      cp .env.sample .env
      ```
    - Edit the `.env` file to configure your settings (e.g., base URL, mail settings).
+   - Check that invitation e-mails can be sent:
+     ```bash
+     php bin/send-test-mail.php you@yourdomain.com
+     ```
 
 4. (Optional) Run the application using Docker Compose:
    ```bash

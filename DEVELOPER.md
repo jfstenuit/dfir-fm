@@ -8,6 +8,7 @@ The application uses a single entrypoint: `index.php`. It handles routing manual
 
 Command-line tools live in `bin/` and refuse to run outside the CLI SAPI:
 - `php bin/create-admin.php <username>`: creates an administrator (or resets an existing user's password and adds them to the admin group) and prints a random password once. This is how the first administrator is created; no default account exists. It's a temporary tool until admin login moves to OIDC (see `PLAN.md`, Phase 2b).
+- `php bin/send-test-mail.php <recipient>`: sends a test e-mail through the configured mail engine, exactly as invitations are sent. Exit code 0 when the engine accepted the message, 1 with the reason on stderr otherwise. Run it as the web server user (e.g. `sudo -u www-data php bin/send-test-mail.php …`) to also check its permissions.
 
 Middleware (such as authentication or CSRF protection) must be applied explicitly per route.
 
@@ -32,10 +33,11 @@ project-root/
 ├── tests/                     # PHPUnit tests (see "Testing")
 │   ├── Unit/                  # Pure logic, no server
 │   ├── Feature/               # HTTP-level, isolated app instance per test
-│   └── Support/               # TestServer, HttpClient, router for php -S
+│   └── Support/               # TestServer, HttpClient, router for php -S, fake SMTP/sendmail
 ├── phpunit.xml.dist           # PHPUnit configuration
 ├── bin/                       # CLI tools (not web-accessible)
-│   └── create-admin.php       # Create the first / an additional administrator
+│   ├── create-admin.php       # Create the first / an additional administrator
+│   └── send-test-mail.php     # Check the mail configuration
 ├── docker/                    # Container deployment
 │   ├── Dockerfile
 │   ├── docker-compose.yml
@@ -116,12 +118,13 @@ composer test:unit       # fast, no server
 composer test:feature    # HTTP-level, ~1 min
 ```
 
-- **`tests/Unit/`**: pure logic. Client IP resolution, config parsing, `Content-Disposition`, Range parsing, storage path validation, backend factories, schema and migrations, admin checks, throttle settings.
+- **`tests/Unit/`**: pure logic. Client IP resolution, config parsing, `Content-Disposition`, Range parsing, storage path validation, backend factories, mail engine configuration and message building, schema and migrations, admin checks, throttle settings.
 - **`tests/Feature/`**: the application over HTTP. Each test starts a fresh, isolated instance on PHP's built-in server (`Tests\Support\TestServer`) in a temporary directory, with its own `.env`, SQLite database, storage, log file and APCu counters. The project's own `.env`, database and storage are never touched.
   - Fixtures: an admin created through `bin/create-admin.php`, a regular user `bob@test.local` and the root directory.
   - `tests/Support/router.php` mirrors `.htaccess` for the built-in server, so `.htaccess` itself still needs checking on a real Apache.
   - `Tests\Support\HttpClient` behaves like a browser: it keeps cookies and handles the CSRF token and login form.
   - Every feature test fails if the server logged a PHP warning, notice, deprecation or fatal error.
+  - Mail never leaves the machine: the test servers and CLI scripts run with `sendmail_path` pointing to `tests/Support/fake-sendmail.php`, and SMTP tests use `Tests\Support\FakeSmtpServer` (a minimal local SMTP sink with `AUTH PLAIN`, no TLS). Both keep the raw messages for assertions. TLS (STARTTLS/SMTPS) is not covered: check it against a real server with `bin/send-test-mail.php`.
 - Security fixes come with a test that fails on the vulnerable code (e.g. `LoginRateLimitTest` for the `X-Forwarded-For` bypass, `AdminAuthorizationTest` for the missing admin guard).
 
 Production installs should use `composer install --no-dev`, which leaves PHPUnit out of `vendor/`.
@@ -185,6 +188,7 @@ The logger is globally available via `App::getLogger()` and all controller-level
 - Uploads / deletions
 - Password changes
 - Group/user permission changes (WIP)
+- Invitations (`user_invited`, with `invitation_sent`) and mail failures (`mail_send_failure`)
 
 **Forensic constraints:**
 - Every uploaded file is SHA256-hashed at write time
@@ -342,10 +346,12 @@ The application uses an Interface/Factory pattern to dynamically select backends
 
 ### Mail engine
 
-Mail engine can be 
-- Standard PHPMailer (uses built-in `mail()` command)
-- PHPMailer for SMTP sending
-- Sendgrid
+Mail is only used for invitation links. `MailEngineFactory::create()` reads the flat `.env` keys (see `.env.sample`) and throws `InvalidArgumentException` on a missing or invalid setting:
+- `mail` (default): PHPMailer with `isMail()`, i.e. the local sendmail binary. PHPMailer encodes headers and rejects header injection; `default_mail_from` is also the envelope sender (`-f`).
+- `smtp`: PHPMailer over SMTP. `smtp_secure=starttls|smtps|none` (STARTTLS is then required, not opportunistic; `none` disables TLS entirely, for local relays). Authentication only when `smtp_user` is set. `SMTPDebug` stays at 0: its output would end up in the HTTP response, and from level 2 it includes the `AUTH` exchange.
+- `sendgrid`: SendGrid Web API v3. An HTTP status ≥ 400 counts as a failure, with SendGrid's error body in the reason.
+
+All engines send UTF-8 HTML with a plain-text alternative (`MailText::fromHtml()`), from `default_mail_from` / `default_mail_from_name`. `send()` returns `false` on failure and `lastError()` gives the reason; it doesn't throw. The caller logs failures as `mail_send_failure` (recipient, engine, error). An invitation whose e-mail fails still creates the contributor; the admin gets `success: false` with a generic message, and the details go to the log only.
 
 ### Storage engine
 
