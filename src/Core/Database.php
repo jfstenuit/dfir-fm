@@ -35,6 +35,7 @@ class Database
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password TEXT NOT NULL,
+    email TEXT UNIQUE,
     invitation_token TEXT,
     token_expiry DATETIME
             );",
@@ -42,13 +43,16 @@ class Database
             "CREATE TABLE IF NOT EXISTS groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
-    description TEXT
+    description TEXT,
+    is_admin INTEGER NOT NULL DEFAULT 0
             );",
 
             "CREATE TABLE IF NOT EXISTS user_group (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    description TEXT
+    user_id INTEGER NOT NULL,
+    group_id INTEGER NOT NULL,
+    PRIMARY KEY (user_id, group_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
             );",
 
             "CREATE TABLE IF NOT EXISTS directories (
@@ -108,22 +112,63 @@ class Database
             self::$connection->exec($query);
         }
 
-        // Insert initial admin group and admin user
-        $adminGroupCheck = self::$connection->query("SELECT COUNT(*) FROM groups WHERE name = 'admin'")->fetchColumn();
+        self::migrate();
+
+        // Ensure an admin group exists. No admin user is seeded: create the
+        // first one with `php bin/create-admin.php <username>`.
+        // Never promote an existing group: its members would silently become admins.
+        $adminGroupCheck = self::$connection->query("SELECT COUNT(*) FROM groups WHERE is_admin = 1")->fetchColumn();
         if ($adminGroupCheck == 0) {
-            self::$connection->exec("INSERT INTO groups (name, description) VALUES ('admin', 'Administrator group')");
+            $stmt = self::$connection->prepare("SELECT COUNT(*) FROM groups WHERE name = :name");
+            foreach (['admin', 'administrators', 'dfir-fm-admins'] as $name) {
+                $stmt->execute([':name' => $name]);
+                if ($stmt->fetchColumn() == 0) {
+                    $insert = self::$connection->prepare("INSERT INTO groups (name, description, is_admin) VALUES (:name, 'Administrator group', 1)");
+                    $insert->execute([':name' => $name]);
+                    break;
+                }
+            }
         }
+    }
 
-        $adminUserCheck = self::$connection->query("SELECT COUNT(*) FROM users WHERE username = 'admin'")->fetchColumn();
-        if ($adminUserCheck == 0) {
-            $hashedPassword = password_hash('admin', PASSWORD_DEFAULT);
-            self::$connection->exec("INSERT INTO users (username, password) VALUES ('admin', '$hashedPassword')");
+    /**
+     * Schema migrations, tracked with PRAGMA user_version.
+     * Each step must be idempotent: fresh databases already have the
+     * current schema from createTables().
+     */
+    private static function migrate()
+    {
+        $version = (int)self::$connection->query("PRAGMA user_version")->fetchColumn();
 
-            $adminGroupId = self::$connection->query("SELECT id FROM groups WHERE name = 'admin'")->fetchColumn();
-            $adminUserId = self::$connection->query("SELECT id FROM users WHERE username = 'admin'")->fetchColumn();
+        if ($version < 1) {
+            self::$connection->beginTransaction();
 
-            self::$connection->exec("INSERT INTO user_group (user_id, group_id) VALUES ($adminUserId, $adminGroupId)");
+            // groups.is_admin replaces the hardcoded "group_id = 1" admin check.
+            // Flag group 1, which is the group that check trusted.
+            if (!self::hasColumn('groups', 'is_admin')) {
+                self::$connection->exec("ALTER TABLE groups ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
+                self::$connection->exec("UPDATE groups SET is_admin = 1 WHERE id = 1");
+            }
+
+            // Lock the formerly seeded 'admin' account if it still has the
+            // default password 'admin'.
+            $stmt = self::$connection->query("SELECT id, password FROM users WHERE username = 'admin'");
+            $seeded = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($seeded && $seeded['password'] !== '!' && password_verify('admin', $seeded['password'])) {
+                $lock = self::$connection->prepare("UPDATE users SET password = '!', invitation_token = NULL, token_expiry = NULL WHERE id = :id");
+                $lock->execute([':id' => $seeded['id']]);
+                error_log("DFIR FM: locked the 'admin' account, which still had the default password. Create a new admin with: php bin/create-admin.php <username>");
+            }
+
+            self::$connection->exec("PRAGMA user_version = 1");
+            self::$connection->commit();
         }
+    }
+
+    private static function hasColumn(string $table, string $column): bool
+    {
+        $columns = self::$connection->query("PRAGMA table_info($table)")->fetchAll(PDO::FETCH_COLUMN, 1);
+        return in_array($column, $columns, true);
     }
 }
 

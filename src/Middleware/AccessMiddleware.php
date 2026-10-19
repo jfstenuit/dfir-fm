@@ -145,15 +145,54 @@ class AccessMiddleware
         $stmt->execute();
     }
     
+    /**
+     * Whether the user belongs to a group flagged as admin.
+     * Evaluated on every call (not cached in the session) so that
+     * revoking admin rights takes effect immediately.
+     */
+    public static function isAdmin($db, $userId): bool
+    {
+        if (empty($userId)) {
+            return false;
+        }
+
+        $stmt = $db->prepare("
+            SELECT 1
+            FROM user_group ug
+            JOIN groups g ON g.id = ug.group_id
+            WHERE ug.user_id = :user_id AND g.is_admin = 1
+            LIMIT 1
+        ");
+        $stmt->bindValue(':user_id', (int)$userId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (bool)$stmt->fetchColumn();
+    }
+
+    /**
+     * Number of users in admin groups whose account is not locked,
+     * optionally excluding one user. Used to prevent removing the last
+     * usable admin.
+     */
+    public static function countActiveAdmins($db, ?int $excludeUserId = null): int
+    {
+        $stmt = $db->prepare("
+            SELECT COUNT(DISTINCT u.id)
+            FROM users u
+            JOIN user_group ug ON ug.user_id = u.id
+            JOIN groups g ON g.id = ug.group_id
+            WHERE g.is_admin = 1 AND u.password <> '!' AND u.id <> :exclude
+        ");
+        $stmt->bindValue(':exclude', $excludeUserId ?? 0, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (int)$stmt->fetchColumn();
+    }
+
     public static function checkAccess($db, $directoryPath, $userId)
     {
-        // Step 1: Check if the user is a member of the admin group (group_id = 1)
-        $stmt = $db->prepare("SELECT 1 FROM user_group WHERE user_id = :user_id AND group_id = 1");
-        $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
-        $stmt->execute();
-        $isAdmin = $stmt->fetchColumn();
-
-        if ($isAdmin) {
+        // Step 1: Admins have full access to every directory
+        if (self::isAdmin($db, $userId)) {
             // Admin has full access rights
             $stmt = $db->prepare("SELECT id FROM directories WHERE path = :directory_name");
             $stmt->bindParam(':directory_name', $directoryPath, PDO::PARAM_STR);

@@ -5,9 +5,10 @@ namespace Controllers;
 use Middleware\AccessMiddleware;
 use Middleware\SecurityMiddleware;
 use Core\Request;
+use Core\Response;
+use Core\Session;
 use Core\App;
 use Backends\MailEngineFactory;
-use Backends\StorageEngineFactory;
 use Views\InvitationView;
 use Views\AdminView;
 use PDO;
@@ -16,15 +17,23 @@ class AdminController
 {
     public static function handle($config, $db)
     {
-        $action = isset($_POST['a']) ? trim($_POST['a']) ?? '' : '';
-        if ($action === "createFolder") {
-            self::createDirectory($config,$db);
-        } elseif ($action === "deleteItem") {
-            self::deleteItem($config,$db);
-        } elseif ($action === "invite") {
+        $action = trim($_POST['a'] ?? '');
+
+        // Every action in this controller is admin-only
+        if (!AccessMiddleware::isAdmin($db, Session::getUserId())) {
+            App::getLogger()->log('admin_access_denied', ['requested_action' => $action]);
+            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                header('Content-Type: application/json');
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Access denied.']);
+            } else {
+                Response::triggerAccessDenied();
+            }
+            return;
+        }
+
+        if ($action === "invite") {
             self::inviteUser($config,$db);
-        } elseif ($action === "updatePassword") {
-            self::updatePassword($config,$db);
         } elseif ($action === "listGroupPermissions") {
             self::listGroupPermissions($config, $db);
         } elseif ($action === "listGroups") {
@@ -155,183 +164,6 @@ class AdminController
 
         echo json_encode(['success' => true, 'message' => 'Contributor invited']);
         return;
-    }
-
-    public static function updatePassword($config, $db) {
-        header('Content-Type: application/json');
-        error_log('TODO code reached !');
-    }
-
-    public static function deleteItem($config,$db) {
-        $itemId = intval($_POST['id']) ?? 0;
-        $itemType = trim($_POST['type']) ?? '';
-        $userId = $_SESSION['user_id'];
-    
-        header('Content-Type: application/json');
-    
-        // Validate input
-        if (!$itemId || !in_array($itemType, ['f', 'd'])) {
-            error_log("Invalid item type or ID: $itemType, $itemId");
-            echo json_encode(['success' => false, 'message' => 'Invalid request parameters']);
-            return;
-        }
-
-
-        if ($itemType === 'd') {
-            $directoryInfo = AccessMiddleware::getDirectoryInfo($db,$itemId);
-            if (!$directoryInfo) {
-                echo json_encode(['success' => false, 'message' => 'Directory not found or access denied']);
-                return;
-            }
-
-            // Check user access to parent directory
-            $accessRights = AccessMiddleware::checkAccess($db, $directoryInfo['parent_path'], $userId);
-            if (!$accessRights['can_write']) {
-                echo json_encode(['success' => false, 'message' => 'Access denied to directory']);
-                return;
-            }
-
-            // We don't delete the empty directories, as we don't create them either
-            // Directories are only created when needed by files and removed when latest
-            // file in directory is removed ("pruning") - if storage engine supports dir hierarchy
-
-            // Ensure directory is empty
-            if (($directoryInfo['subdirectory_count']+$directoryInfo['file_count'])>0) {
-                echo json_encode(['success' => false, 'message' => 'Directory is not empty']);
-                return;
-            }
-    
-            // Remove database entry
-            $stmt = $db->prepare("DELETE FROM directories WHERE id = :id");
-            $stmt->bindParam(':id', $itemId, PDO::PARAM_INT);
-            $stmt->execute();
-
-            App::getLogger()->log('directory_deleted', ['directory'=>$directoryInfo['path']]);
-
-            echo json_encode(['success' => true, 'message' => 'Directory deleted successfully']);
-        } elseif ($itemType === 'f') {
-            $fileInfo = AccessMiddleware::getFileInfo($db,$itemId);;
-            if (!$fileInfo) {
-                echo json_encode(['success' => false, 'message' => 'File not found or access denied']);
-                return;
-            }
-
-            // Check user access to parent directory
-            $accessRights = AccessMiddleware::checkAccess($db, $fileInfo['directory_path'], $userId);
-            if (!$accessRights['can_write']) {
-                echo json_encode(['success' => false, 'message' => 'Access denied to parent directory']);
-                return;
-            }
-            
-            $storageEngine = StorageEngineFactory::create($config);
-            if (!$storageEngine->healthCheck()) {
-                Response::triggerSystemError();
-                return;
-            }
-
-            // Delete the file
-            $path = rtrim($fileInfo['directory_path'], DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $fileInfo['name'];
-            if (!$storageEngine->remove($path)) {
-                error_log("Failed to delete file: $filePath");
-                echo json_encode(['success' => false, 'message' => 'Failed to delete file from storage']);
-                return;
-            }
-    
-            // Remove database entry
-            $stmt = $db->prepare("DELETE FROM files WHERE id = :id");
-            $stmt->bindParam(':id', $itemId, PDO::PARAM_INT);
-            $stmt->execute();
-
-            App::getLogger()->log('file_deleted', ['file'=>$path]);
-
-            echo json_encode(['success' => true, 'message' => 'File deleted successfully']);
-        }
-    }
-        
-    public static function createDirectory($config,$db) {
-        header('Content-Type: application/json');
-
-        $cwd = trim($_POST['cwd']) ?? '';
-        $cwd = $cwd === '' ? '/' : $cwd;
-        $folderName = trim($_POST['name']) ?? ''; // Supposed to be a name, not a path
-        $userId = $_SESSION['user_id'];
-        $remoteIp = Request::getClientIp();
-
-        if (empty($folderName)) {
-            echo json_encode(['success' => false, 'message' => 'Missing folder name.']);
-            return;
-        }
-
-        // Construct new Dir Path (cwd + folder name)
-        $newDirPath = (rtrim($cwd, '/') === '' ? '' : rtrim($cwd, '/')) . '/' . ltrim($folderName, '/');
-
-        // Ensure folder doesn't already exist
-        $existing = $db->prepare("SELECT id FROM directories WHERE path = :path");
-        $existing->execute([':path' => $newDirPath]);
-        if ($existing->fetch()) {
-            echo json_encode(['success' => false, 'message' => 'Folder already exists.']);
-            return;
-        }
-
-        // Validate name: must be a valid directory name
-        if (
-            !mb_check_encoding($folderName, 'UTF-8') ||
-            preg_match('/[<>\/\\\\&]/u', $folderName) ||
-            preg_match('/[\x00-\x1F\x7F]/', $folderName)
-        ) {
-            error_log("Invalid directory name: $folderName");
-            echo json_encode(['success' => false, 'message' => 'Invalid directory name']);
-            return;
-        }
-
-        // Check user access to cwd
-        $accessRights = AccessMiddleware::checkAccess($db, $cwd, $userId);
-        if (!$accessRights['can_write']) {
-            echo json_encode(['success' => false, 'message' => 'Access denied to directory']);
-            return;
-        }
-
-        // Get parent directory Id
-        $stmt = $db->prepare("SELECT id FROM directories WHERE path = :cwd");
-        $stmt->execute([':cwd' => $cwd]);
-        $parent = $stmt->fetch(PDO::FETCH_ASSOC);
-        $parentDirectoryId = $parent ? (int)$parent['id'] : null;
-
-        // Get Username
-        $user = AccessMiddleware::getUserInfo($db, $userId);
-        $userName = $user['email'] ?? 'unknown';
-
-        // Create database entry
-        $utcTimestamp = gmdate('Y-m-d H:i:s');
-        $stmt = $db->prepare("
-            INSERT INTO directories
-                (name, path, parent_id, created_at, created_by, created_from)
-            VALUES
-                (:name, :path, :parent_id, :created_at, :created_by, :created_from)");
-        $stmt->execute([
-            ':name' => $folderName,
-            ':path' => $newDirPath,
-            ':parent_id' => $parentDirectoryId,
-            ':created_at' => $utcTimestamp,
-            ':created_by' => $userId,
-            ':created_from' => $remoteIp
-        ]);
-        $folderId = $db->lastInsertId();
-
-        App::getLogger()->log('directory_created', ['directory'=>$newDirPath]);
-
-        // Directory created successfully
-        echo json_encode([
-            'success' => true,
-            'message' => 'Directory created successfully',
-            'folder' => [
-                'id' => $folderId,
-                'name' => $folderName,
-                'created_at' => $createdAt,
-                'created_by' => $user['username'] ?? $user['email'] ?? 'unknown',
-                'created_from' => $remoteIp
-            ]
-        ]);
     }
 
     private static function listGroupPermissions($config, PDO $db)
@@ -649,8 +481,13 @@ class AdminController
             return;
         }
 
-        if ($user['id']===1) {
-            echo json_encode(['success' => false, 'message' => 'Cannot delete the primary admin user.']);
+        if ((int)$user['id'] === Session::getUserId()) {
+            echo json_encode(['success' => false, 'message' => 'You cannot delete your own account.']);
+            return;
+        }
+
+        if (self::isLastActiveAdmin($db, (int)$user['id'])) {
+            echo json_encode(['success' => false, 'message' => 'Cannot delete the last active administrator.']);
             return;
         }
 
@@ -746,15 +583,20 @@ class AdminController
         }
     
         // Lookup group
-        $stmt = $db->prepare("SELECT id FROM groups WHERE name = :name");
+        $stmt = $db->prepare("SELECT id, is_admin FROM groups WHERE name = :name");
         $stmt->execute([':name' => $groupName]);
         $group = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
         if (!$group) {
             echo json_encode(['success' => false, 'message' => 'Group not found.']);
             return;
         }
-    
+
+        if ($group['is_admin'] && self::isLastActiveAdmin($db, (int)$user['id'])) {
+            echo json_encode(['success' => false, 'message' => 'Cannot remove the last active administrator.']);
+            return;
+        }
+
         // Remove user-group relationship
         $stmt = $db->prepare("DELETE FROM user_group WHERE user_id = :uid AND group_id = :gid");
         $success = $stmt->execute([
@@ -788,6 +630,16 @@ class AdminController
 
         if (!$user) {
             echo json_encode(['success' => false, 'message' => 'User not found.']);
+            return;
+        }
+
+        if ((int)$user['id'] === Session::getUserId()) {
+            echo json_encode(['success' => false, 'message' => 'You cannot lock your own account.']);
+            return;
+        }
+
+        if (self::isLastActiveAdmin($db, (int)$user['id'])) {
+            echo json_encode(['success' => false, 'message' => 'Cannot lock the last active administrator.']);
             return;
         }
 
@@ -857,12 +709,17 @@ class AdminController
         }
 
         // Lookup group
-        $stmt = $db->prepare("SELECT id FROM groups WHERE name = :name");
+        $stmt = $db->prepare("SELECT id, is_admin FROM groups WHERE name = :name");
         $stmt->execute([':name' => $groupName]);
         $group = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$group) {
             echo json_encode(['success' => false, 'message' => 'Group not found.']);
+            return;
+        }
+
+        if ($group['is_admin']) {
+            echo json_encode(['success' => false, 'message' => 'The administrator group cannot be deleted.']);
             return;
         }
 
@@ -883,6 +740,17 @@ class AdminController
         App::getLogger()->log('group_deleted', ['group'=>$groupName]);
 
         echo json_encode(['success' => $success]);
+    }
+
+    /**
+     * True if $userId is an admin and no other active admin exists,
+     * i.e. removing, locking or deleting them would leave nobody able to
+     * administer the application.
+     */
+    private static function isLastActiveAdmin(PDO $db, int $userId): bool
+    {
+        return AccessMiddleware::isAdmin($db, $userId)
+            && AccessMiddleware::countActiveAdmins($db, $userId) === 0;
     }
 
 }

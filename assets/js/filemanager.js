@@ -172,7 +172,7 @@ function createFolder() {
         return;
     }
 
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'createFolder', name: folderName, cwd }})
+    $.ajax({ url: './', method: 'POST', dataType: 'json', data: { a: 'createFolder', name: folderName, cwd }})
         .done(data => {
             $('#newFolderModal').modal('hide');
             if (data.success && data.folder) {
@@ -253,7 +253,7 @@ function handleDelete() {
     const name = $modal.data('name');
     const cwd = $('#cwd').val();
 
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: {
+    $.ajax({ url: './', method: 'POST', dataType: 'json', data: {
         a: 'deleteItem',
         id: id,
         type: type

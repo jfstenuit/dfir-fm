@@ -4,7 +4,10 @@ This document outlines the technical structure and internal workings of the DFIR
 
 ## Bootstrapping & Application Flow
 
-The application uses a single entrypoint: `index.php`. It handles routing manually and initializes all required components (middleware, controller dispatch, view rendering). There are currently no CLI entrypoints, but ad-hoc scripts for testing and cleanup may exist during development.
+The application uses a single entrypoint: `index.php`. It handles routing manually and initializes all required components (middleware, controller dispatch, view rendering).
+
+Command-line tools live in `bin/` and refuse to run outside the CLI SAPI:
+- `php bin/create-admin.php <username>`: creates an administrator (or resets an existing user's password and adds them to the admin group) and prints a random password once. This is how the first administrator is created; no default account exists. It's a temporary tool until admin login moves to OIDC (see `PLAN.md`, Phase 2b).
 
 Middleware (such as authentication or CSRF protection) must be applied explicitly per route.
 
@@ -26,6 +29,8 @@ project-root/
 │       ├── admin-users.js     # Admin: user management
 │       ├── admin-groups.js    # Admin: group management
 │       └── login.js           # Login page (classic script)
+├── bin/                       # CLI tools (not web-accessible)
+│   └── create-admin.php       # Create the first / an additional administrator
 ├── docker/                    # Container deployment
 │   ├── Dockerfile
 │   ├── docker-compose.yml
@@ -158,6 +163,10 @@ Developers must **never bypass or disable** these integrity mechanisms. When add
 Access rights : 
 - a user is in one or more groups
 - a group has access to one or more directories, either in read-only, in read-write or upload-only
+- a group flagged `is_admin = 1` makes its members administrators: full access to every directory, plus the admin interface
+- `AccessMiddleware::isAdmin()` is the single admin check. It queries the database on every request (no session cache), so revoking admin membership takes effect immediately
+- every action of `AdminController` is admin-only (one guard at the top of `handle()`). File operations open to regular users (`createFolder`, `deleteItem`) live in `FileManagerController` (`POST /`, field `a`) and check the caller's rights on the target directory
+- safeguards: the admin group can't be deleted, an admin can't lock or delete their own account, and the last active administrator can't be removed, locked or deleted
 
 ### 1. **User Management**
 | Feature | Description | Location |
@@ -206,10 +215,12 @@ Access rights :
 
 Database initialization is handled programmatically in `src/Core/Database.php`.
 
-There is currently no migration framework in place. On upgrade, developers should:
-- Backup existing data (if necessary)
-- Delete the existing SQLite DB in `storage/database/app.sqlite`
-- Re-run the application to trigger automatic DB re-creation
+`createTables()` creates the current schema on a fresh database. Upgrades of existing databases are handled by `Database::migrate()`, versioned with SQLite's `PRAGMA user_version`. Each step must be idempotent, because fresh databases already have the current schema:
+- **v1:** adds `groups.is_admin` and flags group `id = 1`, the group the former hardcoded admin check trusted. It also locks the formerly seeded `admin` account if it still has the default password `admin`; the lock is reported in the PHP error log. Create a new administrator with `php bin/create-admin.php <username>`.
+
+To add a migration, add a `if ($version < N)` block in `migrate()` that ends with `PRAGMA user_version = N`. Back up `storage/database/app.sqlite` before upgrading.
+
+No user is seeded. A fresh install has an empty admin group: create the first administrator with `bin/create-admin.php`.
 
 All database logic uses raw SQL for performance and transparency.
 
@@ -230,7 +241,8 @@ CREATE TABLE users (
 CREATE TABLE IF NOT EXISTS 'groups' (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
-    description TEXT
+    description TEXT,
+    is_admin INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS 'user_group' (
     user_id INTEGER NOT NULL,
@@ -329,7 +341,7 @@ Each backend is responsible for parsing its configuration from the `.env` file.
 
 ## Known Limitations / To-Do
 
-- No migration strategy is implemented for the database
+- Database migrations are minimal (`PRAGMA user_version` steps in `Database::migrate()`), with no down-migrations
 - No automated tests currently in place
 
 ## Contributing
