@@ -4,6 +4,23 @@ namespace Core;
 
 class Response
 {
+    /**
+     * Content-Disposition header value for a download (RFC 6266): an ASCII
+     * fallback `filename` for old clients plus the exact UTF-8 name in
+     * `filename*`. Quotes, backslashes and control characters can't break
+     * out of the header; `;` is also replaced in the fallback for parsers
+     * that split parameters without honouring quotes.
+     */
+    public static function contentDisposition(string $filename, string $type = 'attachment'): string
+    {
+        $fallback = preg_replace('/[^\x20-\x7e]|["\\\\%;]/', '_', $filename);
+        if ($fallback === '' || $fallback === null) {
+            $fallback = 'download';
+        }
+
+        return sprintf('%s; filename="%s"; filename*=UTF-8\'\'%s', $type, $fallback, rawurlencode($filename));
+    }
+
     public static function triggerNotFound()
     {
         http_response_code(404);

@@ -163,11 +163,22 @@ class LoginController
             return;
         }
     
-        $ip = Request::getClientIp();
-        $key = 'login_attempts_' . md5($ip);
+        // Two independent limits: per client IP (one source guessing many
+        // accounts) and per username (a distributed attack on one account).
+        $limits = SecurityMiddleware::loginThrottleSettings(App::getConfig());
+        $ipKey = 'login_attempts_ip_' . hash('sha256', (string)Request::getClientIp());
+        $userKey = 'login_attempts_user_' . hash('sha256', mb_strtolower($username));
 
-        if (!SecurityMiddleware::throttle($key)) {
-            App::getLogger()->log('login_password_failure', ['cause'=>'Brute force attempt']);
+        // A source that is already blocked doesn't count against the username,
+        // so it can't keep locking out the account owner
+        $ipAllowed = SecurityMiddleware::throttle($ipKey, $limits['per_ip'], $limits['window']);
+        $userAllowed = $ipAllowed && SecurityMiddleware::throttle($userKey, $limits['per_user'], $limits['window']);
+        if (!$ipAllowed || !$userAllowed) {
+            App::getLogger()->log('login_password_failure', [
+                'cause' => 'Brute force attempt',
+                'limit' => $ipAllowed ? 'username' : 'ip',
+                'target_user' => $username,
+            ]);
             echo json_encode(['success' => false, 'message' => 'Too many login attempts. Try again later.']);
             return;
         }
@@ -178,7 +189,10 @@ class LoginController
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
         if ($user && password_verify($password, $user['password'])) {
-            SecurityMiddleware::clearThrottle($key);
+            // Only the username counter is reset. Resetting the IP counter
+            // would let an attacker with one valid account clear it between
+            // guesses on other accounts.
+            SecurityMiddleware::clearThrottle($userKey);
             Session::authenticate($user);
 
             App::getLogger()->log('login_password_success', []);

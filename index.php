@@ -7,6 +7,12 @@ define('SRC_PATH', BASE_PATH . '/src');
 define('STORAGE_PATH', BASE_PATH . '/storage');
 define('ENV_FILE', BASE_PATH . '/.env');
 
+// Security headers, sent first so that every response carries them
+// (redirects and error pages included)
+header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self';");
+header('X-Content-Type-Options: nosniff');
+header('Referrer-Policy: same-origin');
+
 // Autoload classes
 require_once BASE_PATH . '/vendor/autoload.php';
 
@@ -71,12 +77,8 @@ if ($requestUri !== '/login') {
     }
 }
 
-// CSP
-header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self';");
-
-// CSRF protection
-$csrfExemptRoutes = ['/login'];
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array($requestUri, $csrfExemptRoutes)) {
+// CSRF protection, including the login form (login CSRF)
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!SecurityMiddleware::validateCsrfToken()) {
         header('Content-Type: application/json');
         http_response_code(403);

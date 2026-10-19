@@ -1,4 +1,15 @@
 $(function() {
+    const csrfToken = $('meta[name="csrf-token"]').attr('content');
+    $.ajaxSetup({ headers: { 'X-CSRF-TOKEN': csrfToken } });
+
+    // A 403 means the CSRF token no longer matches the session (e.g. the
+    // session expired while the page was open): reload to get a fresh one.
+    $(document).ajaxError((event, xhr) => {
+        if (xhr.status === 403) {
+            window.location.reload();
+        }
+    });
+
     $('#nextBtn').on('click', function () {
         const email = $('#username').val().trim();
         $('#loginMessage').text('');

@@ -2,6 +2,8 @@
 // src/Views/LoginView.php
 namespace Views;
 
+use Core\Session;
+
 class LoginView
 {
     public static function render($redirect)
@@ -12,6 +14,7 @@ class LoginView
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo Session::getCsrfToken(); ?>">
     <title>Login</title>
     <link rel="stylesheet" href="vendor/components/bootstrap/css/bootstrap.min.css">
     <link rel="stylesheet" href="vendor/components/font-awesome/css/all.min.css">

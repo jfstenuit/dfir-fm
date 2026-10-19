@@ -1,14 +1,23 @@
 RewriteEngine On
 
-# Prevent access to sensitive directories and files
-RewriteRule ^storage(/|$) - [R=404,L]
-RewriteRule ^\.env$ - [R=404,L]
+# RewriteRule patterns below are relative to this directory, so they work
+# whatever the URL prefix the application is installed under.
 
-# If the URI is in /assets/ and the file does not exist, return 404
-RewriteCond %{REQUEST_URI} /(assets|vendor)(/|$)
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteRule .* - [R=404,L]
+# Prevent access to sensitive directories and files
+RewriteRule ^(storage|src|bin|docker)(/|$) - [R=404,L]
+RewriteRule (^|/)\. - [R=404,L]
+
+# assets/ and vendor/: serve existing static files only. Anything else there
+# (PHP scripts shipped by Composer packages, READMEs, missing files) is a 404.
+RewriteCond %{REQUEST_FILENAME} -f
+RewriteRule ^(assets|vendor)/.+\.(css|js|map|woff2?|ttf|otf|eot|svg|png|jpe?g|gif|webp|ico)$ - [L]
+RewriteRule ^(assets|vendor)(/|$) - [R=404,L]
 
 # Redirect all other requests to index.php
-RewriteCond %{REQUEST_URI} !/(assets|vendor)(/|$)
 RewriteRule ^ index.php [L]
+
+<IfModule mod_headers.c>
+    # Also applies to static files served directly by Apache
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "same-origin"
+</IfModule>

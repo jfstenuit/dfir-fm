@@ -7,8 +7,34 @@ class Session
     public static function start()
     {
         if (session_status() === PHP_SESSION_NONE) {
+            // Reject session IDs the server didn't issue (session fixation)
+            ini_set('session.use_strict_mode', '1');
+            ini_set('session.use_only_cookies', '1');
+            ini_set('session.use_trans_sid', '0');
+
+            // SameSite=Lax rather than Strict: Strict drops the cookie on
+            // navigations coming from another site, which breaks invitation
+            // links opened from an e-mail and the future OIDC callback.
+            // Cross-site POSTs are still blocked (Lax + CSRF tokens).
+            session_set_cookie_params([
+                'lifetime' => 0,
+                'path' => self::cookiePath(),
+                'secure' => Request::isHttps(),
+                'httponly' => true,
+                'samesite' => 'Lax',
+            ]);
             session_start();
         }
+    }
+
+    /**
+     * Restrict the cookie to the application's base path, so other
+     * applications on the same host don't receive it.
+     */
+    private static function cookiePath(): string
+    {
+        $dir = str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/'));
+        return rtrim($dir, '/') . '/';
     }
 
     public static function getCsrfToken(): string {
@@ -26,6 +52,11 @@ class Session
 
     public static function authenticate($user)
     {
+        // New session ID on privilege change (session fixation), and a new
+        // CSRF token so a token issued before login isn't reused after it
+        session_regenerate_id(true);
+        unset($_SESSION['csrf_token']);
+
         $_SESSION['user_id'] = $user['user_id'];
         $_SESSION['username'] = $user['username'];
         $_SESSION['last_activity'] = time();

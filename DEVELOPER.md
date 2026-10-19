@@ -116,10 +116,14 @@ Future developers are encouraged to lay the foundation for testing once core fea
 The application now implements several layers of security to defend against common web application threats:
 
 - **CSRF Protection**  
-  A CSRF token is generated per session and injected into all AJAX requests via `X-CSRF-TOKEN` headers. All POST requests are verified globally in `index.php` before reaching controller logic. Tokens are managed via `Session::getCsrfToken()` and validated via `SecurityMiddleware::validateCsrfToken()`.
+  A CSRF token is generated per session and injected into all AJAX requests via `X-CSRF-TOKEN` headers. All POST requests are verified globally in `index.php` before reaching controller logic, **including the login form** (login CSRF), which carries the token in a `csrf-token` meta tag like the other pages. The token is rotated at login. Tokens are managed via `Session::getCsrfToken()` and validated via `SecurityMiddleware::validateCsrfToken()`. `login.js` reloads the page on a 403, which happens when the session expired while the page was open.
 
 - **Brute-force Protection**  
-  Login attempts are rate-limited per client IP (see *Client IP resolution* below) using **APCu in-memory counters**. Configuration is hardcoded (5 attempts per 5 minutes). If APCu is unavailable, the app triggers a fatal error to avoid silent exposure.
+  Login attempts are rate-limited with **APCu in-memory counters**, using two independent limits within a window of `login_lockout_duration` seconds (default 300):
+  - per client IP (see *Client IP resolution* below): `max_login_attempts`, default 5;
+  - per username, from any IP: `max_login_attempts_per_user`, default 10. It's higher because anyone can use it to lock a known username out for the window.
+
+  A request already blocked by the IP limit doesn't count against the username. A successful login resets the username counter only: resetting the IP counter would let an attacker clear it by logging into their own account. Invalid values fall back to the defaults. If APCu is unavailable, the app triggers a fatal error to avoid silent exposure. Counters are per server: several containers or servers don't share them.
 
 - **Client IP resolution**  
   `Request::getClientIp()` is the only source of the client address, used for rate limiting, audit logs and forensic records (`uploaded_from`, `created_from`). It is controlled by the `trusted_proxies` setting: a comma-separated list of IPv4/IPv6 addresses or CIDR ranges.
@@ -135,11 +139,17 @@ The application now implements several layers of security to defend against comm
   Login flow avoids leaking user presence. The two-step login screen always advances to password input, regardless of user existence, and response timing is normalized.
 
 - **Content Security Policy (CSP)**  
-  A strict `Content-Security-Policy` header is emitted from `index.php`.
+  A strict `Content-Security-Policy` header is emitted from `index.php`, together with `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. They are sent before anything else, so redirects and error pages carry them too. `.htaccess` sets the latter two for static files when `mod_headers` is available.
+
+- **Static files**  
+  `.htaccess` serves only existing static files (CSS, JS, fonts, images) under `assets/` and `vendor/`; anything else there is a 404, including PHP scripts shipped by Composer packages. `storage/`, `src/`, `bin/`, `docker/` and dotfiles are refused, and every other path goes through `index.php`.
+
+- **Downloads**  
+  `Response::contentDisposition()` builds the `Content-Disposition` header: an ASCII fallback `filename` with quotes, backslashes, `%`, `;` and control characters replaced, plus the exact name in `filename*=UTF-8''…` (RFC 6266).
 
 
 - **Session Hijack Protection**  
-Session management uses strict `HttpOnly`, `Secure`, and `SameSite` attributes. Sessions are validated against inactivity timeout and invalidated on logout.
+Session cookies are `HttpOnly`, `SameSite=Lax`, scoped to the application's base path, and `Secure` when the request is HTTPS (directly, or `X-Forwarded-Proto` from a trusted proxy). `Lax` rather than `Strict`: `Strict` drops the cookie on navigations coming from another site, which breaks invitation links opened from an e-mail and the planned OIDC callback. Cross-site POSTs remain blocked by `Lax` and the CSRF tokens. `session.use_strict_mode` rejects session IDs the server didn't issue, and the session ID is regenerated at login (session fixation). Sessions are validated against inactivity timeout and invalidated on logout.
 
 Future improvements may include:
 - Device/session management

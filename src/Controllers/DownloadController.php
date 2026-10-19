@@ -66,7 +66,7 @@ class DownloadController
         // Set headers for file download
         header('Content-Description: File Transfer');
         header('Content-Type: application/octet-stream');
-        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Content-Disposition: ' . Response::contentDisposition($filename));
         header('Content-Transfer-Encoding: binary');
         header('Expires: 0');
         header('Cache-Control: must-revalidate');
