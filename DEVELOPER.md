@@ -335,15 +335,26 @@ Mail engine can be
 ### Storage engine
 
 Storage engine can be :
-- Local for the local filesystem
-- Amazon S3
-- Azure Blob storage
+- Local for the local filesystem (`base_storage_directory` must be an existing directory)
+- Amazon S3 and Azure Blob storage: planned, not implemented. `storage_engine=amazon_s3|azure_blob` is refused with an explicit error.
 
 ### Logging
 
 - Syslog
 - File
 - Stderr : For Docker and containerized deployments
+
+## Configuration
+
+`Core\Config::load()` reads `.env` (template: `.env.sample`):
+- one `key=value` per line; blank lines and lines starting with `#` are ignored;
+- a value wrapped in matching `"…"` or `'…'` is unquoted, and an optional `export ` prefix is accepted;
+- a `#` inside a value is kept, because passwords may contain one. There are no inline comments;
+- malformed lines are ignored and reported in the PHP error log by line number only, never their content.
+
+**Environment overrides:** `DFIRFM_<KEY>` overrides or adds `<key>` (lowercased), e.g. `DFIRFM_STORAGE_ENGINE=local`. Unprefixed variables are ignored. `.env` may be absent only if at least one `DFIRFM_` variable is set, as in containers. Otherwise a missing file stops the application.
+
+**Permissions:** `.env` holds secrets and must be readable by the PHP user but not by everyone, e.g. owner you, group `www-data`, mode `640`. An unreadable `.env` stops the application with a 500 ("Environment file not readable"), rather than silently running on defaults as earlier versions did.
 
 ## Backend Extensibility
 

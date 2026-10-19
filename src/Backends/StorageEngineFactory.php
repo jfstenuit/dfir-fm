@@ -5,27 +5,16 @@ namespace Backends;
 class StorageEngineFactory {
     public static function create($config) {
         $engine = $config['storage_engine'] ?? 'local';
-        $settings = $config['storage_settings'] ?? [];
 
         switch ($engine) {
             case 'local':
-                return new StorageEngineLocal($config['base_storage_directory']);
+                return new StorageEngineLocal($config['base_storage_directory'] ?? '');
             case 'azure_blob':
-                // Validate settings
-                if (1==1) { // TODO
-                    throw new \Exception('Azure settings are incomplete.');
-                }
-                
-                return new StorageEngineAzureBlob();
             case 'amazon_s3':
-                // Validate settings
-                if (1==1) { // TODO
-                    throw new \Exception('AWS settings are incomplete.');
-                }
-                
-                return new StorageEngineAmazonS3();
+                // Planned (see README, "Future Features"), not implemented yet
+                throw new \Exception("Storage engine '$engine' is not implemented yet; use storage_engine=local");
             default:
-                throw new \Exception('Invalid mail engine specified in configuration');
+                throw new \Exception("Invalid storage engine specified in configuration: '$engine'");
         }
     }
 }

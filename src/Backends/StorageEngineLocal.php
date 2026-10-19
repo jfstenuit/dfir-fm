@@ -7,11 +7,16 @@ class StorageEngineLocal implements StorageEngineInterface
     private $baseDirectory;
 
     public function __construct($baseDirectory) {
-        $this->baseDirectory = rtrim(realpath($baseDirectory), DIRECTORY_SEPARATOR);
-
-        if ($this->baseDirectory === false) {
+        // Check before trimming: rtrim(false) would turn a failed realpath()
+        // into '' and silently make '/' the storage root. An empty setting
+        // must be refused too: realpath('') is the current directory.
+        $baseDirectory = trim((string)$baseDirectory);
+        $resolved = $baseDirectory === '' ? false : realpath($baseDirectory);
+        if ($resolved === false || !is_dir($resolved)) {
             throw new \Exception("Invalid base directory: $baseDirectory");
         }
+
+        $this->baseDirectory = rtrim($resolved, DIRECTORY_SEPARATOR);
     }
 
     /**
@@ -133,7 +138,8 @@ class StorageEngineLocal implements StorageEngineInterface
         $data = fread($file, $length);
         fclose($file);
 
-        return $data ?: null;
+        // Not `$data ?: null`: the string "0" is falsy in PHP
+        return $data === false ? null : $data;
     }
 
     /**

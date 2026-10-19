@@ -18,7 +18,12 @@ class DownloadController
         $userId = $_SESSION['user_id'];
 
         // Get the requested path from the query parameter `p`
-        $requestedFile = trim($_GET['p']) ?? '';
+        $requestedFile = is_string($_GET['p'] ?? null) ? trim($_GET['p']) : '';
+        if ($requestedFile === '') {
+            App::getLogger()->log('download_failure', ['cause'=>'No file requested']);
+            Response::triggerNotFound();
+            return;
+        }
         $pathParts = pathinfo($requestedFile);
 
         // Check that directory exists
@@ -67,35 +72,27 @@ class DownloadController
         header('Content-Description: File Transfer');
         header('Content-Type: application/octet-stream');
         header('Content-Disposition: ' . Response::contentDisposition($filename));
-        header('Content-Transfer-Encoding: binary');
+        // Evidence must never be stored by shared caches (proxies, CDN)
+        header('Cache-Control: private, no-store');
         header('Expires: 0');
-        header('Cache-Control: must-revalidate');
-        header('Pragma: public');
+        header('Accept-Ranges: bytes');
 
         // Handle partial content requests (e.g., for resuming downloads)
         $start = 0;
         $end = $filesize - 1;
-        if (isset($_SERVER['HTTP_RANGE'])) {
-            $range = $_SERVER['HTTP_RANGE'];
-
-            App::getLogger()->log('download_partial', ['file'=>$filename, 'directory'=>$pathParts['dirname'], 'range'=>$range]);
-
-            if (preg_match('/bytes=(\d+)-(\d*)/', $range, $matches)) {
-                $start = intval($matches[1]);
-                if (!empty($matches[2])) {
-                    $end = intval($matches[2]);
-                }
-            }
-
-            // Validate range
-            if ($start > $end || $start >= $filesize || $end >= $filesize) {
-                header('HTTP/1.1 416 Requested Range Not Satisfiable');
-                header('Content-Range: bytes */' . $filesize);
-                return;
-            }
+        $range = self::parseRange($_SERVER['HTTP_RANGE'] ?? null, $filesize);
+        if ($range === false) {
+            App::getLogger()->log('download_failure', ['cause'=>'Range not satisfiable', 'file'=>$filename, 'range'=>$_SERVER['HTTP_RANGE']]);
+            http_response_code(416);
+            header('Content-Range: bytes */' . $filesize);
+            return;
+        }
+        if ($range !== null) {
+            [$start, $end] = $range;
+            App::getLogger()->log('download_partial', ['file'=>$filename, 'directory'=>$pathParts['dirname'], 'range'=>$_SERVER['HTTP_RANGE']]);
 
             // Inform the client about the partial content
-            header('HTTP/1.1 206 Partial Content');
+            http_response_code(206);
             header('Content-Range: bytes ' . $start . '-' . $end . '/' . $filesize);
         } else {
             App::getLogger()->log('download_success', ['file'=>$filename, 'directory'=>$pathParts['dirname']]);
@@ -130,6 +127,45 @@ class DownloadController
             $currentOffset += $bytesToRead;
         }
 
+    }
+
+    /**
+     * Parse a Range header (RFC 9110, single byte range only).
+     *
+     * @return array{0:int,1:int}|null|false [start, end] (inclusive) for a
+     *   satisfiable range; null to ignore the header and send the whole file
+     *   (absent, malformed or multi-range); false if unsatisfiable (416).
+     */
+    public static function parseRange(?string $header, int $size): array|null|false
+    {
+        if ($header === null || !preg_match('/^\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*$/i', $header, $m)) {
+            return null;
+        }
+        [, $first, $last] = $m;
+
+        if ($first === '' && $last === '') {
+            return null;
+        }
+
+        if ($first === '') {
+            // Suffix range "bytes=-N": the last N bytes
+            $suffix = (int)$last;
+            if ($suffix === 0 || $size === 0) {
+                return false;
+            }
+            return [max(0, $size - $suffix), $size - 1];
+        }
+
+        $start = (int)$first;
+        if ($start >= $size) {
+            return false;
+        }
+        // An end beyond the file is clamped, not an error
+        $end = $last === '' ? $size - 1 : min((int)$last, $size - 1);
+        if ($end < $start) {
+            return null;
+        }
+        return [$start, $end];
     }
 }
 ?>

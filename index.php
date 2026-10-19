@@ -118,7 +118,7 @@ switch ($requestUri) {
         break;
     
     default:
-        Middleware\NotFoundMiddleware::triggerNotFound();
+        Response::triggerNotFound();
         break;
 }
 ?>
