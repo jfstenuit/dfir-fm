@@ -45,3 +45,6 @@ composer.phar
 *.log
 .env
 
+# AI assistant
+.claude
+

@@ -14,72 +14,74 @@ project-root/
 │
 ├── index.php                  # Single entry point for the application
 ├── .htaccess                  # Apache mod_rewrite rules for routing (if using Apache)
-├── assets/                    # Static assets like images, JavaScript, and CSS
+├── assets/                    # Static assets (CSS, JavaScript)
 │   ├── css/
+│   │   ├── login.css          # Login page styles
 │   │   └── style.css          # Main CSS file
-│   ├── js/
-│   │   └── site.js            # Main JavaScript file
-│   └── images/                # Image files
-│       ├── icons/             # Icon files (SVGs, PNGs, etc.)
-│       └── logos/             # Logos for branding
+│   └── js/
+│       ├── site.js            # Entry module, loads page-specific modules
+│       ├── utils.js           # Shared helpers (AJAX, CSRF, escaping, modals)
+│       ├── filemanager.js     # File manager page
+│       ├── admin.js           # Admin page entry
+│       ├── admin-users.js     # Admin: user management
+│       ├── admin-groups.js    # Admin: group management
+│       └── login.js           # Login page (classic script)
+├── docker/                    # Container deployment
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   ├── lighttpd.conf
+│   └── .env.example
 ├── src/                       # Source code directory
 │   ├── Backends/              # Dynamically selected backends
 │   │   ├── LogEngine*.php     # Handles logging
 │   │   ├── MailEngine*.php    # Handles mail sending
 │   │   └── StorageEngine*.php # Handles backend storage
-│   ├── Controllers
+│   ├── Controllers/
 │   │   ├── AdminController.php
 │   │   ├── DownloadController.php
 │   │   ├── FileManagerController.php
 │   │   ├── LoginController.php
 │   │   ├── LogoutController.php
+│   │   ├── ProfileController.php
 │   │   └── UploadController.php
-│   ├── Core
+│   ├── Core/
 │   │   ├── App.php            # Singleton pattern to store $db, $config and $logger
 │   │   ├── Config.php
 │   │   ├── Database.php
 │   │   ├── Request.php
 │   │   ├── Response.php
 │   │   └── Session.php
-│   ├── Middleware
+│   ├── Middleware/
 │   │   ├── AccessMiddleware.php
 │   │   └── SecurityMiddleware.php
 │   └── Views/                 # Templates for rendering HTML
-│       ├── auth/              # Views for authentication
-│       ├── errors/            # Error pages
-│       ├── file/              # Views for file operations
-│       ├── layouts/           # Layout files (e.g., header, footer)
 │       ├── Modals/            # Bootstrap modals
-|       │   ├── AccessRightsModal.php
-|       │   ├── DeleteConfirmationModal.php
-|       │   ├── InviteModal.php
-|       │   ├── NewFolderModal.php
-|       │   ├── OperationResultModal.php
-|       │   ├── UploadModal.php
-|       │   └── UserGroupModal.php
+│       │   ├── AccessRightsModal.php
+│       │   ├── DeleteConfirmationModal.php
+│       │   ├── InviteModal.php
+│       │   ├── NewFolderModal.php
+│       │   ├── OperationResultModal.php
+│       │   ├── ProfileModal.php
+│       │   ├── UploadModal.php
+│       │   └── UserGroupModal.php
 │       ├── AdminView.php
 │       ├── FileManagerView.php
 │       ├── InvitationView.php
-│       ├── LoginView.php
-│       ├── layouts/           # Layout files (e.g., header, footer)
-│       ├── file/              # Views for file operations
-│       ├── auth/              # Views for authentication
-│       └── errors/            # Error pages
-├── storage/                   # Storage directory (not publicly accessible directly)
+│       └── LoginView.php
+├── storage/                   # Created at runtime, not in git; must not be web-accessible
 │   ├── database/              # SQLite database files
 │   │   └── app.sqlite         # Main SQLite database
-│   ├── files/                 # Secure storage for uploaded files
-│   └── logs/                  # Log files
-│       └── app.log
-├── tests/                     # Automated tests
-│   ├── Unit/                  # Unit tests
-│   ├── Feature/               # Feature/integration tests
-│   └── bootstrap.php          # Test setup/bootstrap file
+│   ├── files/                 # Storage for uploaded files (local storage engine)
+│   └── logs/                  # Log files (file log engine)
 ├── vendor/                    # Composer dependencies (auto-generated)
 ├── composer.json              # Composer configuration file
 ├── composer.lock              # Composer lock file
-├── .env                       # Environment variables
+├── .env.sample                # Configuration template, copy to .env
+├── .env                       # Environment variables (not in git)
 ├── .gitignore                 # Git ignore rules
+├── DEVELOPER.md               # This document
+├── PLAN.md                    # Remediation & modernisation plan
+├── LICENSE.md
 └── README.md                  # Documentation
 ```
 
