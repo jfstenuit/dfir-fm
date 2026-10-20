@@ -10,8 +10,6 @@ class Layout
     public const ICONS_CSS = 'vendor/twbs/bootstrap-icons/font/bootstrap-icons.min.css';
     // Includes Popper (dropdowns); sets window.bootstrap
     public const BOOTSTRAP_JS = 'vendor/twbs/bootstrap/dist/js/bootstrap.bundle.min.js';
-    // Until every script is converted (Phase 4 steps 3-8)
-    public const JQUERY_JS = 'vendor/components/jquery/jquery.min.js';
 
     /**
      * Print <head>: charset, viewport, CSRF token, title, then the given
@@ -47,11 +45,7 @@ class Layout
                 'vendor/enyo/dropzone/dist/dropzone.css',
                 'assets/css/style.css',
             ],
-            [
-                self::JQUERY_JS,
-                self::BOOTSTRAP_JS,
-                'vendor/corejavascript/typeahead.js/dist/typeahead.bundle.min.js',
-            ],
+            [self::BOOTSTRAP_JS],
             // filemanager.js imports Dropzone (dropzone.mjs) itself
             ['assets/js/site.js']
         );

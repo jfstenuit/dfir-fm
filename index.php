@@ -9,7 +9,9 @@ define('ENV_FILE', BASE_PATH . '/.env');
 
 // Security headers, sent first so that every response carries them
 // (redirects and error pages included)
-header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self';");
+// No inline scripts or styles anywhere (Bootstrap 5 sets styles through the CSSOM,
+// which CSP allows); data: images are Bootstrap's own SVG icons in its CSS
+header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self';");
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
 

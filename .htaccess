@@ -7,10 +7,12 @@ RewriteEngine On
 RewriteRule ^(storage|src|bin|docker|tests)(/|$) - [R=404,L]
 RewriteRule (^|/)\. - [R=404,L]
 
-# assets/ and vendor/: serve existing static files only. Anything else there
-# (PHP scripts shipped by Composer packages, READMEs, missing files) is a 404.
+# Static files: existing files under assets/ and the built front-end files of
+# the three packages the pages load. Anything else there (PHP scripts, sources
+# and build scripts shipped by Composer packages, READMEs, missing files) is a
+# 404. tests/Support/router.php mirrors this.
 RewriteCond %{REQUEST_FILENAME} -f
-RewriteRule ^(assets|vendor)/.+\.(css|js|mjs|map|woff2?|ttf|otf|eot|svg|png|jpe?g|gif|webp|ico)$ - [L]
+RewriteRule ^(assets/|vendor/twbs/bootstrap/dist/|vendor/twbs/bootstrap-icons/font/|vendor/enyo/dropzone/dist/).+\.(css|js|mjs|map|woff2?|ttf|otf|eot|svg|png|jpe?g|gif|webp|ico)$ - [L]
 RewriteRule ^(assets|vendor)(/|$) - [R=404,L]
 
 # Redirect all other requests to index.php

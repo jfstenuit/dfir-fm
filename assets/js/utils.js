@@ -1,35 +1,6 @@
 // assets/js/utils.js - Helpers shared by the page scripts (no dependencies
 // beyond Bootstrap 5's window.bootstrap for the modal helpers)
 
-// Escape plain text to be safely inserted into innerHTML
-export function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// Escape a string to be safely used inside an HTML attribute
-export function escapeAttribute(value) {
-    const div = document.createElement('div');
-    div.setAttribute('data-x', value);
-    return div.getAttribute('data-x');
-}
-
-// Escape URL for use in href, src, etc. (with optional strict whitelist)
-export function escapeUrl(url) {
-    try {
-        const parsed = new URL(url, window.location.origin);
-        // Optionally whitelist only same-origin or safe schemes
-        if (!['http:', 'https:'].includes(parsed.protocol)) {
-            throw new Error('Unsafe URL scheme');
-        }
-        return parsed.href;
-    } catch (e) {
-        console.warn('Blocked unsafe URL:', url);
-        return '#';
-    }
-}
-
 /** The page's CSRF token (meta csrf-token), sent by api() as X-CSRF-TOKEN */
 export function getCsrfToken() {
     return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');

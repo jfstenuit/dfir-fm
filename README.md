@@ -134,7 +134,6 @@ For full license details, see the `LICENSE` file.
 ## Acknowledgments
 We appreciate the tools and libraries that made this project possible, including:
 - [Dropzone.js](https://www.dropzone.dev/) for file uploads
-- [DataTables](https://datatables.net/) for dynamic table management
 - [Bootstrap](https://getbootstrap.com/) for the user interface
 - [Bootstrap Icons](https://icons.getbootstrap.com/) for the icons
 

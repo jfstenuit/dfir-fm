@@ -24,14 +24,15 @@ project-root/
 │   ├── css/
 │   │   ├── login.css          # Login page styles
 │   │   └── style.css          # Main CSS file
-│   └── js/
-│       ├── site.js            # Entry module, loads page-specific modules
-│       ├── utils.js           # Shared helpers (AJAX, CSRF, escaping, modals)
-│       ├── filemanager.js     # File manager page
-│       ├── admin.js           # Admin page entry
+│   └── js/                    # ES modules, no build step (see "Front end")
+│       ├── site.js            # Entry module of the app pages, loads the page's module
+│       ├── utils.js           # Shared helpers: api(), h(), modals, delegation, group suggestions
+│       ├── sortable-table.js  # Click-to-sort table columns
+│       ├── filemanager.js     # File manager page (imports Dropzone)
+│       ├── admin.js           # Admin page entry: tabs, password change
 │       ├── admin-users.js     # Admin: user management
 │       ├── admin-groups.js    # Admin: group management
-│       └── login.js           # Login page (classic script)
+│       └── login.js           # Login page
 ├── tests/                     # PHPUnit tests (see "Testing")
 │   ├── Unit/                  # Pure logic, no server
 │   ├── Feature/               # HTTP-level, isolated app instance per test
@@ -109,11 +110,22 @@ project-root/
 - Set up a standard Apache + PHP 8.x + SQLite environment.
 - All logs go to the default PHP error log.
 - No framework or build system is used at this time.
-- JavaScript and CSS files are managed manually.
+- JavaScript and CSS files are managed manually (see "Front end").
 
 To debug:
 - Use `error_log()` for PHP
 - Use browser dev tools for JS
+
+## Front end
+
+- **Libraries**, from Composer, served from `vendor/` as built: Bootstrap 5.3 (`twbs/bootstrap`, the bundle with Popper, exposes `window.bootstrap`), Bootstrap Icons (`twbs/bootstrap-icons`, `bi bi-*` classes) and Dropzone 6 (`enyo/dropzone`, imported by `filemanager.js` as `dist/dropzone.mjs`). No jQuery.
+- **Pages:** `Views/Layout.php` prints every page's `<head>`; `Layout::appHead()` is the asset list of the file manager and admin pages, whose entry module is `site.js`. The login page loads `login.js` only.
+- **Modules** are plain ES modules (`type="module"`), loaded without a bundler. They run once the document is parsed.
+- **Requests** go through `api(url, {data | json | body})` in `utils.js`: it sends the CSRF token, parses JSON and throws an `ApiError` (`status`, `code`, server `message`) on a network failure, an HTTP error, a non-JSON body or `{success: false}`. A redirect to the login page or a CSRF 403 (`code: csrf_invalid`) means the session is gone: the page reloads.
+- **DOM:** build elements with `h(tag, attributes, ...children)` (text children are text nodes, never parsed as HTML) and `icon(name)`; no HTML strings with data in them. Table actions use event delegation (`on(root, type, selector, handler)`), bound once.
+- **Dialogs:** Bootstrap 5 modals through `showModal()` / `hideModal()` (the latter resolves once hidden); results in `showResultMessage()`. Dialog forms are `<form novalidate>` submitted by their footer button (`form="…"`), so Enter submits them and the script validates.
+- **Group names:** `groupAutocomplete(input)` attaches a `<datalist>` filled from `admin?a=listGroups`.
+- **CSP:** no inline `<script>`, `style=` or `<style>` in pages (see *Content Security Policy*). Styles go in `assets/css/`; scripts may set styles through the CSSOM (`element.style`).
 
 ## Testing
 
@@ -127,7 +139,7 @@ composer test:feature    # HTTP-level, ~1 min
 
 - **`tests/Unit/`**: pure logic. Client IP resolution, config parsing, `Content-Disposition`, Range parsing, storage path validation, backend factories, mail engine configuration and message building, schema and migrations, admin checks, throttle settings.
 - **`tests/Feature/`**: the application over HTTP. Each test starts a fresh, isolated instance on PHP's built-in server (`Tests\Support\TestServer`) in a temporary directory, with its own `.env`, SQLite database, storage, log file and APCu counters. The project's own `.env`, database and storage are never touched.
-  - Fixtures: an admin created through `bin/create-admin.php`, a regular user `bob@test.local` and the root directory.
+  - Fixtures: an admin created through `bin/create-admin.php` and a regular user `bob@test.local`. The root directory (id 1) is created by the schema setup, as on a real install.
   - `tests/Support/router.php` mirrors `.htaccess` for the built-in server, so `.htaccess` itself still needs checking on a real Apache.
   - `Tests\Support\HttpClient` behaves like a browser: it keeps cookies and handles the CSRF token and login form.
   - Every feature test fails if the server logged a PHP warning, notice, deprecation or fatal error.
@@ -141,7 +153,7 @@ Production installs should use `composer install --no-dev`, which leaves PHPUnit
 The application now implements several layers of security to defend against common web application threats:
 
 - **CSRF Protection**  
-  A CSRF token is generated per session and injected into all AJAX requests via `X-CSRF-TOKEN` headers. All POST requests are verified globally in `index.php` before reaching controller logic, **including the login form** (login CSRF), which carries the token in a `csrf-token` meta tag like the other pages. The token is rotated at login. Tokens are managed via `Session::getCsrfToken()` and validated via `SecurityMiddleware::validateCsrfToken()`. `login.js` reloads the page on a 403, which happens when the session expired while the page was open.
+  A CSRF token is generated per session; pages carry it in a `csrf-token` meta tag and send it as the `X-CSRF-TOKEN` header (`api()` in `utils.js`, and Dropzone's chunk requests). All POST requests are verified globally in `index.php` before reaching controller logic, **including the login form** (login CSRF). The token is rotated at login. Tokens are managed via `Session::getCsrfToken()` and validated via `SecurityMiddleware::validateCsrfToken()`. A refused token answers 403 with `code: csrf_invalid`, which happens when the session expired while the page was open; `api()` then reloads the page (a plain 403, e.g. a refused right, doesn't).
 
 - **Brute-force Protection**  
   Login attempts are rate-limited with **APCu in-memory counters**, using two independent limits within a window of `login_lockout_duration` seconds (default 300):
@@ -165,10 +177,10 @@ The application now implements several layers of security to defend against comm
   Login flow avoids leaking user presence. The two-step login screen always advances to password input, regardless of user existence, and response timing is normalized.
 
 - **Content Security Policy (CSP)**  
-  A strict `Content-Security-Policy` header is emitted from `index.php`, together with `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. They are sent before anything else, so redirects and error pages carry them too. `.htaccess` sets the latter two for static files when `mod_headers` is available.
+  A strict `Content-Security-Policy` header is emitted from `index.php`: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'`. No inline scripts or styles are allowed; `data:` images are the SVG icons in Bootstrap's own CSS. It is sent together with `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`, before anything else, so redirects and error pages carry them too. `.htaccess` sets the latter two for static files when `mod_headers` is available.
 
 - **Static files**  
-  `.htaccess` serves only existing static files (CSS, JS, fonts, images) under `assets/` and `vendor/`; anything else there is a 404, including PHP scripts shipped by Composer packages. `storage/`, `src/`, `bin/`, `docker/` and dotfiles are refused, and every other path goes through `index.php`.
+  `.htaccess` serves only existing static files (CSS, JS including `.mjs`, fonts, images) under `assets/` and the build folders of the three front-end packages (`vendor/twbs/bootstrap/dist/`, `vendor/twbs/bootstrap-icons/font/`, `vendor/enyo/dropzone/dist/`); anything else under `assets/` or `vendor/` is a 404, including PHP scripts, sources and build scripts shipped by Composer packages. `storage/`, `src/`, `bin/`, `docker/` and dotfiles are refused, and every other path goes through `index.php`. A front-end package added later needs its folder added there and in `tests/Support/router.php`.
 
 - **Downloads**  
   `Response::contentDisposition()` builds the `Content-Disposition` header: an ASCII fallback `filename` with quotes, backslashes, `%`, `;` and control characters replaced, plus the exact name in `filename*=UTF-8''…` (RFC 6266).

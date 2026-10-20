@@ -22,11 +22,11 @@ class AccessRightsModal {
           <table class="table table-bordered table-striped" id="groupAccessTable">
             <thead class="table-light">
               <tr>
-                <th style="width: 35%;">Group</th>
-                <th style="width: 10%;">Read</th>
-                <th style="width: 10%;">Write</th>
-                <th style="width: 10%;">Upload</th>
-                <th style="width: 10%;">Remove</th>
+                <th>Group</th>
+                <th>Read</th>
+                <th>Write</th>
+                <th>Upload</th>
+                <th>Remove</th>
               </tr>
             </thead>
             <tbody id="groupAccessTableBody">
