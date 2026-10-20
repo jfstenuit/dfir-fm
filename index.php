@@ -83,7 +83,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!SecurityMiddleware::validateCsrfToken()) {
         header('Content-Type: application/json');
         http_response_code(403);
-        echo json_encode(['success' => false, 'message' => 'Invalid CSRF token']);
+        // code: lets the client tell an expired token from a refused right (also 403)
+        echo json_encode(['success' => false, 'code' => 'csrf_invalid', 'message' => 'Invalid CSRF token']);
         exit;
     }
 }

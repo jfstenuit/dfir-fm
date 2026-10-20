@@ -200,3 +200,29 @@ a:hover {
     text-align: center;
     overflow-wrap: anywhere;
 }
+
+/* Sortable tables (assets/js/sortable-table.js) */
+table.sortable .sort-button {
+    all: unset;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: .25em;
+}
+table.sortable .sort-button:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+table.sortable .sort-button::after {
+    content: "\2195";   /* ↕ */
+    opacity: .3;
+    font-size: .85em;
+}
+table.sortable th[aria-sort="ascending"] .sort-button::after {
+    content: "\25B2";   /* ▲ */
+    opacity: .8;
+}
+table.sortable th[aria-sort="descending"] .sort-button::after {
+    content: "\25BC";   /* ▼ */
+    opacity: .8;
+}

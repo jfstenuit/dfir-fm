@@ -81,7 +81,9 @@ final class SessionSecurityTest extends FeatureTestCase
         $this->assertSame(64, strlen((string)$token), 'login page carries a token');
 
         $credentials = ['action' => 'login', 'username' => TestServer::BOB, 'password' => TestServer::BOB_PASSWORD];
-        $this->assertSame(403, $client->post('login', $credentials)->status, 'no token');
+        $refused = $client->post('login', $credentials);
+        $this->assertSame(403, $refused->status, 'no token');
+        $this->assertSame('csrf_invalid', $refused->json()['code'], 'tells the client to reload, not "no right"');
         $this->assertSame(403, $client->post('login', $credentials, ['headers' => ['X-CSRF-TOKEN' => 'deadbeef']])->status, 'wrong token');
         $this->assertSame(403, $client->post('login', $credentials + ['csrf_token' => ['x']])->status, 'array token');
         $this->assertSame(403, $client->post('login', ['action' => 'checkUser', 'email' => 'a@b'])->status, 'checkUser without token');
