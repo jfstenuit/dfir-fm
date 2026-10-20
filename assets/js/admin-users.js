@@ -1,206 +1,141 @@
-import { showResultMessage, initGroupTypeahead } from './utils.js';
+// assets/js/admin-users.js - Admin page, Users tab: list, invite, groups, lock, delete
 
-let $userRowTemplateCache = null;
+import { api, h, icon, on, hideModal, showModal, showResultMessage, groupAutocomplete } from './utils.js';
 
+const byId = id => document.getElementById(id);
+let bound = false;
+
+/** Bind the tab's handlers (once) */
 export function init() {
-    document.querySelector('#inviteUserForm')?.addEventListener('submit', handleInviteUser);
-    document.querySelector('#assignGroupForm')?.addEventListener('submit', handleConfirmAddGroup);
-    document.querySelector('#usersTable')?.addEventListener('click', handleUserTableClick);
+    if (bound) return;
+    bound = true;
+    byId('inviteUserForm')?.addEventListener('submit', inviteUser);
+    byId('assignGroupForm')?.addEventListener('submit', addToGroup);
+    groupAutocomplete('#groupAssignInput');
+
+    on('#usersTable', 'click', '.resend-invite', (event, button) => resendInvite(userOf(button)));
+    on('#usersTable', 'click', '.lock-user', (event, button) => lockUser(userOf(button)));
+    on('#usersTable', 'click', '.delete-user', (event, button) => deleteUser(userOf(button)));
+    on('#usersTable', 'click', '.add-group', (event, button) => openAddToGroup(userOf(button)));
+    on('#usersTable', 'click', '.remove-group', (event, button) =>
+        removeFromGroup(userOf(button), button.closest('[data-group]').dataset.group));
 }
 
+/** Called each time the tab is shown */
 export function load() {
-    init(); // bind events (idempotent)
+    init();
     loadUserTable();
 }
 
-function loadUserTable() {
-    if (!$userRowTemplateCache) {
-        const $template = $('#userRowTemplate');
-        $userRowTemplateCache = $template.clone().removeAttr('id').addClass('d-none');
-        $template.remove(); // clean from DOM
+const userOf = element => element.closest('tr').dataset.user;
+
+async function loadUserTable() {
+    try {
+        const users = await api('admin', { data: { a: 'listUsers' } });
+        document.querySelector('#usersTable tbody').replaceChildren(...(users ?? []).map(userRow));
+    } catch (error) {
+        showResultMessage('Failed to load users: ' + error.message, false);
     }
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'listUsers' }})
-        .done(users => {
-            const $tbody = $('#usersTable tbody');
-            $tbody.empty();
-
-            users.forEach(user => {
-                const row = renderUserRow(user, $userRowTemplateCache.clone());
-                $tbody.append(row);
-            });
-        })
-        .fail(xhr => {
-            showResultMessage('Failed to load users: ' + xhr.statusText, false);
-        });
 }
 
-function renderUserRow(user, $template) {
-    const $row = $template.clone().removeClass('d-none');
-    $row.attr('data-user', user.email);
-    $row.find('.user-email').text(user.email);
+function userRow(user) {
+    const active = user.status === 'active';
+    const groupBadge = group => h('span', { class: 'badge text-bg-primary me-1', dataset: { group } },
+        group,
+        h('button', { type: 'button', class: 'badge-action remove-group', title: 'Remove from group',
+                      'aria-label': `Remove ${user.email} from ${group}` }, icon('x-lg')));
 
-    const $groupCell = $row.find('.user-groups').empty();
-    user.groups.forEach(group => {
-        const $badge = $('<span>')
-            .addClass('badge text-bg-primary me-1')
-            .text(group + ' ')
-            .append($('<i class="bi bi-x-lg remove-group ms-1" title="Remove from group">'));
-        $groupCell.append($badge).append(' ');
-    });
-    $groupCell.append(
-        $('<span>')
-            .addClass('badge text-bg-secondary add-group')
-            .attr('title', 'Add to a group')
-            .append($('<i class="bi bi-plus-lg">'))
-    );
-
-    const $statusCell = $row.find('.status').empty();
-    $statusCell.append(
-        $('<span>')
-            .addClass('badge')
-            .addClass(user.status === 'active' ? 'text-bg-success' : 'text-bg-secondary')
-            .attr('title', user.status === 'active'
-                ? 'User has a password or valid token'
-                : 'User has no valid credentials')
-            .text(user.status === 'active' ? 'Active' : 'Locked')
-    );
-
-    if (user.status !== 'active') {
-        $row.find('.lock-user').prop('disabled', true).attr('title', 'This user is already locked');
-    }
-
-    return $row;
+    return h('tr', { dataset: { user: user.email } },
+        h('td', { class: 'user-email' }, user.email),
+        h('td', { class: 'user-groups' },
+            user.groups.map(groupBadge),
+            h('button', { type: 'button', class: 'badge text-bg-secondary border-0 add-group', title: 'Add to a group',
+                          'aria-label': `Add ${user.email} to a group` }, icon('plus-lg'))),
+        h('td', { class: 'status text-center' },
+            h('span', { class: `badge ${active ? 'text-bg-success' : 'text-bg-secondary'}`,
+                        title: active ? 'User has a password or valid token' : 'User has no valid credentials' },
+                active ? 'Active' : 'Locked')),
+        h('td', { class: 'actions text-center' },
+            h('button', { type: 'button', class: 'btn btn-sm btn-link resend-invite', title: 'Re-send invitation email' }, icon('envelope-open')),
+            h('button', { type: 'button', class: 'btn btn-sm btn-link lock-user', disabled: !active,
+                          title: active ? 'Lock this user' : 'This user is already locked' }, icon('lock')),
+            h('button', { type: 'button', class: 'btn btn-sm btn-link text-danger delete-user', title: 'Delete user' }, icon('trash'))));
 }
 
-// -------------------------
-// Event Handlers
-// -------------------------
+/**
+ * Run an action and report it. On success: message (the server's, else
+ * `done`), then reload the table if asked.
+ */
+async function act(fields, done, { reload = true } = {}) {
+    try {
+        const response = await api('admin', { data: fields });
+        showResultMessage(response?.message || done, true);
+        if (reload) loadUserTable();
+        return true;
+    } catch (error) {
+        showResultMessage(error.message, false);
+        return false;
+    }
+}
 
-function handleInviteUser(event) {
+async function inviteUser(event) {
     event.preventDefault();
-    const email = $('#inviteEmailInput').val().trim();
-
+    const input = byId('inviteEmailInput');
+    const email = input.value.trim();
     if (!email) {
         showResultMessage('Email address cannot be empty.', false);
         return;
     }
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: {
-        a: 'invite',
-        email: email,
-        sendLink: false // just create user
-    }}).done(data => {
-        showResultMessage(data.message || 'User created.', data.success);
-        if (data.success) {
-            $('#inviteEmailInput').val('');
-            loadUserTable();
-        }
-    }).fail(xhr => {
-        showResultMessage('Failed to invite user: ' + xhr.statusText, false);
-    });
+    // Creates the user only: no folder, no rights, no e-mail
+    if (await act({ a: 'invite', email, sendLink: false }, 'User created.')) {
+        input.value = '';
+    }
 }
 
-function handleUserTableClick(event) {
-    const $target = $(event.target);
-    if ($target.closest('.delete-user').length) handleDeleteUser(event);
-    else if ($target.closest('.lock-user').length) handleLockUser(event);
-    else if ($target.closest('.resend-invite').length) handleResendInvite(event);
-    else if ($target.closest('.add-group').length) handleAddToGroup(event);
-    else if ($target.closest('.remove-group').length) handleRemoveFromGroup(event);
+function resendInvite(email) {
+    act({ a: 'resendInvite', email }, 'Invitation resent.', { reload: false });
 }
 
-function handleDeleteUser(event) {
-    const email = $(event.target).closest('tr').data('user');
-    if (!email || !confirm(`Delete user ${email}?`)) return;
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'deleteUser', email }})
-        .done(data => {
-            showResultMessage(data.message || 'User deleted.', data.success);
-            if (data.success) loadUserTable();
-        })
-        .fail(xhr => {
-            showResultMessage('Error deleting user: ' + xhr.statusText, false);
-        });
+function lockUser(email) {
+    if (confirm(`Lock user ${email}?`)) {
+        act({ a: 'lockUser', email }, 'User locked.');
+    }
 }
 
-function handleLockUser(event) {
-    const email = $(event.target).closest('tr').data('user');
-    if (!email || !confirm(`Lock user ${email}?`)) return;
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'lockUser', email }})
-        .done(data => {
-            showResultMessage(data.message || 'User locked.', data.success);
-            if (data.success) loadUserTable();
-        })
-        .fail(xhr => {
-            showResultMessage('Error locking user: ' + xhr.statusText, false);
-        });
+function deleteUser(email) {
+    if (confirm(`Delete user ${email}?`)) {
+        act({ a: 'deleteUser', email }, 'User deleted.');
+    }
 }
 
-function handleResendInvite(event) {
-    const email = $(event.target).closest('tr').data('user');
-    if (!email) return;
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'resendInvite', email }})
-        .done(data => {
-            showResultMessage(data.message || 'Invitation resent.', data.success);
-        })
-        .fail(xhr => {
-            showResultMessage('Error resending invite: ' + xhr.statusText, false);
-        });
+function openAddToGroup(email) {
+    byId('targetUserEmail').value = email;
+    byId('groupAssignInput').value = '';
+    showModal('#addUserToGroupModal');
 }
 
-function handleAddToGroup(event) {
-    const email = $(event.target).closest('tr').data('user');
-    if (!email) return;
-
-    $('#targetUserEmail').val(email);
-    $('#groupAssignInput').typeahead('val', '');
-    $('#addUserToGroupModal').modal('show');
-}
-
-function handleConfirmAddGroup(event) {
+async function addToGroup(event) {
     event.preventDefault();
-    const email = $('#targetUserEmail').val();
-    const group = $('#groupAssignInput').val().trim();
-
+    const email = byId('targetUserEmail').value;
+    const group = byId('groupAssignInput').value.trim();
     if (!group || !email) {
         showResultMessage('Missing group or email.', false);
         return;
     }
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'addUserToGroup', email, group }})
-        .done(data => {
-            if (data.success) {
-                $('#addUserToGroupModal').modal('hide');
-                loadUserTable();
-            } else {
-                showResultMessage(data.message || 'Failed to add group.', false);
-            }
-        })
-        .fail(xhr => {
-            showResultMessage('Error adding to group: ' + xhr.statusText, false);
-        });
+    try {
+        await api('admin', { data: { a: 'addUserToGroup', email, group } });
+        await hideModal('#addUserToGroupModal');
+        loadUserTable();
+    } catch (error) {
+        showResultMessage(error.message, false);
+    }
 }
 
-function handleRemoveFromGroup(event) {
-    const $row = $(event.target).closest('tr');
-    const email = $row.data('user');
-    const $badge = $(event.target).closest('.badge');
-    const group = $badge.text().trim().replace(/\s*×$/, '');
-
-    if (!email || !group) return;
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'removeUserFromGroup', email, group }})
-        .done(data => {
-            if (data.success) {
-                loadUserTable();
-            } else {
-                showResultMessage(data.message || 'Failed to remove group.', false);
-            }
-        })
-        .fail(xhr => {
-            showResultMessage('Error removing group: ' + xhr.statusText, false);
-        });
+async function removeFromGroup(email, group) {
+    try {
+        await api('admin', { data: { a: 'removeUserFromGroup', email, group } });
+        loadUserTable();
+    } catch (error) {
+        showResultMessage(error.message, false);
+    }
 }

@@ -150,8 +150,18 @@ a:hover {
   text-align: center;
 }
 
-.badge .bi-x-lg,
-.badge .bi-plus-lg {
+/* Buttons inside and as badges (admin-users.js) */
+.badge .badge-action {
+  all: unset;
+  cursor: pointer;
+  margin-left: .25rem;
+}
+.badge .badge-action:focus-visible,
+button.badge:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+button.badge {
   cursor: pointer;
 }
 

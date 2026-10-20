@@ -88,23 +88,7 @@ class AdminView
             </tr>
           </thead>
           <tbody>
-            <!-- Template -->
-            <tr id="userRowTemplate" class="d-none">
-              <td class="user-email"></td>
-              <td class="user-groups"></td>
-              <td class="status text-center"></td>
-              <td class="actions text-center">
-                <button class="btn btn-sm btn-link resend-invite" title="Re-send invitation email">
-                  <i class="bi bi-envelope-open" aria-hidden="true"></i>
-                </button>
-                <button class="btn btn-sm btn-link lock-user" title="Lock this user">
-                  <i class="bi bi-lock" aria-hidden="true"></i>
-                </button>
-                <button class="btn btn-sm btn-link text-danger delete-user" title="Delete user">
-                  <i class="bi bi-trash" aria-hidden="true"></i>
-                </button>
-              </td>
-            </tr>
+            <!-- Rows built by admin-users.js -->
           </tbody>
         </table>
       </div>
