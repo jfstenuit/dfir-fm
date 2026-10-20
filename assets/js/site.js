@@ -1,18 +1,13 @@
-import { setupCsrfHeader } from './utils.js';
+// assets/js/site.js - Entry point of the application pages: loads the page's
+// script. A module runs once the document is parsed, so the elements exist.
+// Requests carry the CSRF token through api() (utils.js).
 
-document.addEventListener('DOMContentLoaded', async () => {
-    setupCsrfHeader();  // Ensure CSRF token is applied to all AJAX calls
+if (document.getElementById('fileUploader')) {
+    const { init } = await import('./filemanager.js');
+    init();
+}
 
-    const isFileManager = document.getElementById('fileUploader');
-    const isAdminPage = document.querySelector('[data-bs-target="#usersTab"], [data-bs-target="#groupsTab"], [data-bs-target="#logsTab"]');
-
-    if (isFileManager) {
-        const { init } = await import('./filemanager.js');
-        init();
-    }
-
-    if (isAdminPage) {
-        const { init } = await import('./admin.js');
-        init();
-    }
-});
+if (document.querySelector('[data-bs-target="#usersTab"], [data-bs-target="#groupsTab"], [data-bs-target="#logsTab"]')) {
+    const { init } = await import('./admin.js');
+    init();
+}

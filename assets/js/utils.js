@@ -1,29 +1,5 @@
-export function initGroupTypeahead($input) {
-    const groupNames = new Bloodhound({
-        datumTokenizer: Bloodhound.tokenizers.whitespace,
-        queryTokenizer: Bloodhound.tokenizers.whitespace,
-        remote: {
-            url: 'admin',
-            prepare: function (query, settings) {
-                settings.type = 'POST';
-                settings.data = { a: 'listGroups', q: query };
-                return settings;
-            },
-            transform: function (response) {
-                return response;
-            }
-        }
-    });
-
-    $input.typeahead({
-        hint: true,
-        highlight: true,
-        minLength: 1
-    }, {
-        name: 'groups',
-        source: groupNames
-    });
-}
+// assets/js/utils.js - Helpers shared by the page scripts (no dependencies
+// beyond Bootstrap 5's window.bootstrap for the modal helpers)
 
 // Escape plain text to be safely inserted into innerHTML
 export function escapeHtml(text) {
@@ -54,26 +30,10 @@ export function escapeUrl(url) {
     }
 }
 
-export function setupCsrfHeader() {
-    const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-    if (!token) return;
-
-    $.ajaxSetup({
-        beforeSend: function (xhr) {
-            xhr.setRequestHeader('X-CSRF-Token', token);
-        }
-    });
-}
-
+/** The page's CSRF token (meta csrf-token), sent by api() as X-CSRF-TOKEN */
 export function getCsrfToken() {
     return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
 }
-
-
-// ---------------------------------------------------------------------------
-// Native helpers (no jQuery). The jQuery helpers above go once their last
-// caller has moved to these.
-// ---------------------------------------------------------------------------
 
 /** A request refused by the server or that never reached it (status 0) */
 export class ApiError extends Error {
