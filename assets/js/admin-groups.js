@@ -1,92 +1,61 @@
-import { showResultMessage } from './utils.js';
+// assets/js/admin-groups.js - Admin page, Groups tab: groups, members, folders, delete
 
-let $groupRowTemplateCache = null;
+import { api, h, icon, on, showResultMessage } from './utils.js';
 
+let bound = false;
+
+/** Bind the tab's handlers (once) */
 export function init() {
-    document.querySelector('#groupsTable')?.addEventListener('click', (event) => {
-        if (event.target.closest('.delete-group')) {
-            handleDeleteGroup(event);
-        }
-    });
+    if (bound) return;
+    bound = true;
+    on('#groupsTable', 'click', '.delete-group', (event, button) => deleteGroup(button.dataset.group));
 }
 
+/** Called each time the tab is shown */
 export function load() {
-    init(); // Bind once
+    init();
     loadGroupTable();
 }
 
-function loadGroupTable() {
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'listGroupsWithDetails' }})
-        .done(groups => {
-            if (!$groupRowTemplateCache) {
-                const $template = $('#groupRowTemplate');
-                $groupRowTemplateCache = $template.clone().removeAttr('id').removeClass('d-none');
-
-                $template.remove(); // Clean original from DOM
-            }
-            const $tbody = $('#groupsTable tbody').empty();
-            groups.forEach(group => {
-                const $row = renderGroupRow(group);
-                $tbody.append($row);
-            });
-        })
-        .fail(xhr => {
-            showResultMessage('Failed to load groups: ' + xhr.statusText, false);
-        });
+async function loadGroupTable() {
+    try {
+        const groups = await api('admin', { data: { a: 'listGroupsWithDetails' } });
+        document.querySelector('#groupsTable tbody').replaceChildren(...(groups ?? []).map(groupRow));
+    } catch (error) {
+        showResultMessage('Failed to load groups: ' + error.message, false);
+    }
 }
 
-function renderGroupRow(group) {
-
-    const $row = $groupRowTemplateCache.clone();
-    $row.find('.group-name').text(group.name);
-
-    // Members
-    const $members = $row.find('.group-members').empty();
-    group.members.forEach(email => {
-        $members.append(
-            $('<span>').addClass('badge text-bg-primary me-1').text(email)
-        );
-    });
-
-    // Directories
-    const $dirs = $row.find('.group-directories').empty();
-    group.directories.forEach(dir => {
-        let label = 'unknown', badgeClass = 'text-bg-secondary';
-        if (dir.can_write) {
-            label = 'write';
-            badgeClass = 'text-bg-success';
-        } else if (dir.can_upload) {
-            label = 'upload';
-            badgeClass = 'text-bg-warning';
-        } else if (dir.can_view) {
-            label = 'read';
-            badgeClass = 'text-bg-info';
-        }
-
-        $dirs.append(
-            $('<span>')
-                .addClass(`badge ${badgeClass} me-1`)
-                .text(`${dir.path} (${label})`)
-        );
-    });
-
-    // Set delete button's group name
-    $row.find('.delete-group').attr('data-group', group.name);
-
-    return $row;
+/** The strongest right a group has on a folder, and its badge colour */
+function strongestRight(folder) {
+    if (folder.can_write) return ['write', 'text-bg-success'];
+    if (folder.can_upload) return ['upload', 'text-bg-warning'];
+    if (folder.can_view) return ['read', 'text-bg-info'];
+    return ['unknown', 'text-bg-secondary'];
 }
 
-function handleDeleteGroup(event) {
-    const $btn = $(event.target).closest('.delete-group');
-    const group = $btn.data('group');
-    if (!group || !confirm(`Delete group "${group}"?`)) return;
+function groupRow(group) {
+    return h('tr', {},
+        h('td', { class: 'group-name' }, group.name),
+        h('td', { class: 'group-members' },
+            group.members.map(email => h('span', { class: 'badge text-bg-primary me-1' }, email))),
+        h('td', { class: 'group-directories' },
+            group.directories.map(folder => {
+                const [label, colour] = strongestRight(folder);
+                return h('span', { class: `badge ${colour} me-1` }, `${folder.path} (${label})`);
+            })),
+        h('td', { class: 'group-actions text-center' },
+            h('button', { type: 'button', class: 'btn btn-sm btn-danger delete-group', dataset: { group: group.name },
+                          title: 'Delete group', 'aria-label': `Delete group ${group.name}` }, icon('trash'))));
+}
 
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'deleteGroup', name: group }})
-        .done(data => {
-            showResultMessage(data.message || 'Group deleted.', data.success);
-            if (data.success) loadGroupTable();
-        })
-        .fail(xhr => {
-            showResultMessage('Error deleting group: ' + xhr.statusText, false);
-        });
+async function deleteGroup(name) {
+    if (!name || !confirm(`Delete group "${name}"?`)) return;
+    try {
+        const response = await api('admin', { data: { a: 'deleteGroup', name } });
+        showResultMessage(response?.message || 'Group deleted.', true);
+        loadGroupTable();
+    } catch (error) {
+        showResultMessage(error.message, false);
+    }
 }

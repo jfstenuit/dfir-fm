@@ -94,7 +94,7 @@ class AdminView
       </div>
 
       <div class="tab-pane fade" id="groupsTab">
-        <!-- Groups DataTable -->
+        <!-- Groups -->
         <table id="groupsTable" class="table table-bordered table-striped table-hover table-sm">
           <thead class="table-light">
             <tr>
@@ -105,23 +105,13 @@ class AdminView
             </tr>
           </thead>
           <tbody>
-            <!-- Template -->
-            <tr id="groupRowTemplate" class="d-none">
-              <td class="group-name"></td>
-              <td class="group-members"></td>
-              <td class="group-directories"></td>
-              <td class="group-actions text-center">
-                <button class="btn btn-sm btn-danger delete-group" data-group="" title="Delete group">
-                  <i class="bi bi-trash" aria-hidden="true"></i>
-                </button>
-              </td>
-            </tr>
+            <!-- Rows built by admin-groups.js -->
           </tbody>
         </table>
       </div>
 
       <div class="tab-pane fade" id="logsTab">
-        <!-- Logs DataTable -->
+        <!-- Logs (not implemented yet) -->
         <table id="logsTable" class="table table-bordered table-striped table-hover table-sm">
           <thead class="table-light">
             <tr>
