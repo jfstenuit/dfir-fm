@@ -29,4 +29,15 @@ final class FileListingTest extends FeatureTestCase
         $this->server->addFile('evidence.txt', "hello\n");
         $this->assertStringContainsString('evidence.txt', $this->adminClient()->get('')->body);
     }
+
+    /** Upload names may contain <, > and &: they were printed raw (stored HTML injection) */
+    public function testNamesAreEscaped(): void
+    {
+        $this->server->addFile('a <img src=x onerror=alert(1)> & "b".txt', "x\n");
+
+        $body = $this->adminClient()->get('')->body;
+        $this->assertStringNotContainsString('<img src=x', $body);
+        $this->assertStringContainsString('>a &lt;img src=x onerror=alert(1)&gt; &amp; &quot;b&quot;.txt</a>', $body);
+        $this->assertStringContainsString('data-name="a &lt;img src=x onerror=alert(1)&gt; &amp; &quot;b&quot;.txt"', $body);
+    }
 }

@@ -10,8 +10,8 @@ export async function init() {
 }
 
 function bindTabSwitch() {
-    $('a[data-toggle="tab"]').on('shown.bs.tab', function (e) {
-        const target = $(e.target).attr('data-target');
+    $('a[data-bs-toggle="tab"]').on('shown.bs.tab', function (e) {
+        const target = $(e.target).attr('data-bs-target');
         if (target === '#usersTab') AdminUsers.load();
         else if (target === '#groupsTab') AdminGroups.load();
         // else if (target === '#logsTab') AdminLogs.load();

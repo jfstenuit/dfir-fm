@@ -33,11 +33,6 @@ form {
     margin: 0 0 10px;
 }
 
-.form-group {
-    margin-bottom: 15px;
-    text-align: left;
-}
-
 label {
     display: block;
     margin-bottom: 5px;
@@ -62,16 +57,10 @@ input[type="password"]:focus {
     box-shadow: 0 0 3px rgba(0, 123, 255, 0.5);
 }
 
-button:hover {
-    background-color: #0056b3;
-}
-
-.oidc-btn {
-    background-color: #6c757d;
-}
-
-.oidc-btn:hover {
-    background-color: #5a6268;
+/* DataTables' stylesheet forces separate borders, which hides Bootstrap 5's
+   row borders. Goes with DataTables (Phase 4 step 4). */
+table.dataTable.table-bordered {
+    border-collapse: collapse !important;
 }
 
 /* File manager */
@@ -158,12 +147,12 @@ a:hover {
   text-align: center;
 }
 
-.badge .fa-times,
-.badge .fa-plus {
+.badge .bi-x-lg,
+.badge .bi-plus-lg {
   cursor: pointer;
 }
 
-/* --- Typeahead Styling for Bootstrap 4 --- */
+/* --- Typeahead styling (until the datalist replaces it) --- */
 
 .tt-menu {
     background-color: #fff;

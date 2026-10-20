@@ -2,8 +2,6 @@
 // src/Views/LoginView.php
 namespace Views;
 
-use Core\Session;
-
 class LoginView
 {
     public static function render($redirect)
@@ -11,25 +9,14 @@ class LoginView
 ?>
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="csrf-token" content="<?php echo Session::getCsrfToken(); ?>">
-    <title>Login</title>
-    <link rel="stylesheet" href="vendor/components/bootstrap/css/bootstrap.min.css">
-    <link rel="stylesheet" href="vendor/components/font-awesome/css/all.min.css">
-    <link rel="stylesheet" href="assets/css/login.css">
-    <script src="vendor/components/jquery/jquery.min.js"></script>
-    <script src="vendor/components/bootstrap/js/bootstrap.min.js"></script>
-    <script src="assets/js/login.js"></script>
-</head>
+<?php Layout::head('Login', [Layout::BOOTSTRAP_CSS, 'assets/css/login.css'], [Layout::JQUERY_JS, 'assets/js/login.js']); ?>
 <body class="login">
 <div class="login-container">
     <h2>Please authenticate</h2>
 
     <!-- Step 1: Email input -->
     <div id="step-login">
-        <div class="form-group">
+        <div class="login-field">
             <input type="text" id="username" name="username" placeholder="Enter your email" autocomplete="username" required>
         </div>
         <button class="btn" id="nextBtn">Next</button>
@@ -37,7 +24,7 @@ class LoginView
 
     <!-- Step 2: Password input -->
     <div id="step-password" class="d-none">
-        <div class="form-group">
+        <div class="login-field">
             <input type="password" id="password" name="password" placeholder="Enter your password" autocomplete="current-password" required>
         </div>
         <button class="btn" id="loginBtn">Login</button>

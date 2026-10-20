@@ -44,28 +44,28 @@ function renderGroupRow(group) {
     const $members = $row.find('.group-members').empty();
     group.members.forEach(email => {
         $members.append(
-            $('<span>').addClass('badge badge-primary mr-1').text(email)
+            $('<span>').addClass('badge text-bg-primary me-1').text(email)
         );
     });
 
     // Directories
     const $dirs = $row.find('.group-directories').empty();
     group.directories.forEach(dir => {
-        let label = 'unknown', badgeClass = 'badge-secondary';
+        let label = 'unknown', badgeClass = 'text-bg-secondary';
         if (dir.can_write) {
             label = 'write';
-            badgeClass = 'badge-success';
+            badgeClass = 'text-bg-success';
         } else if (dir.can_upload) {
             label = 'upload';
-            badgeClass = 'badge-warning';
+            badgeClass = 'text-bg-warning';
         } else if (dir.can_view) {
             label = 'read';
-            badgeClass = 'badge-info';
+            badgeClass = 'text-bg-info';
         }
 
         $dirs.append(
             $('<span>')
-                .addClass(`badge ${badgeClass} mr-1`)
+                .addClass(`badge ${badgeClass} me-1`)
                 .text(`${dir.path} (${label})`)
         );
     });

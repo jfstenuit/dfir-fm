@@ -85,6 +85,7 @@ project-root/
 │       ├── AdminView.php
 │       ├── FileManagerView.php
 │       ├── InvitationView.php
+│       ├── Layout.php         # <head> shared by the pages (asset lists)
 │       └── LoginView.php
 ├── storage/                   # Created at runtime, not in git; must not be web-accessible
 │   ├── database/              # SQLite database files

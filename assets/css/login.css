@@ -16,10 +16,10 @@ h2 {
     box-shadow: 0 0 10px rgba(0,0,0,0.1);
     width: 300px;
 }
-.form-group {
+.login-field {
     margin-bottom: 1em;
 }
-.form-group input {
+.login-field input {
     width: 100%;
     padding: 0.5em;
     box-sizing: border-box;

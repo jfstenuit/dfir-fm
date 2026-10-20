@@ -12,19 +12,17 @@ class UserGroupModal  {
     
       <div class="modal-header">
         <h5 class="modal-title">Assign Group to User</h5>
-        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-          <span>&times;</span>
-        </button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
 
       <div class="modal-body">
         <form id="assignGroupForm">
-          <div class="form-group">
-            <label for="groupAssignInput" class="sr-only">Group</label>
+          <div class="mb-3">
+            <label for="groupAssignInput" class="visually-hidden">Group</label>
             <input type="text" class="form-control" id="groupAssignInput" placeholder="Start typing group name..." autocomplete="off">
           </div>
           <input type="hidden" id="targetUserEmail" name="email" value="">
-          <button type="submit" class="btn btn-primary btn-block">Add Group</button>
+          <button type="submit" class="btn btn-primary w-100">Add Group</button>
         </form>
         <small class="text-muted">If no match is found, the group will be created automatically.</small>
       </div>

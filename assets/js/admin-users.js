@@ -43,22 +43,23 @@ function renderUserRow(user, $template) {
     const $groupCell = $row.find('.user-groups').empty();
     user.groups.forEach(group => {
         const $badge = $('<span>')
-            .addClass('badge badge-primary mr-1')
+            .addClass('badge text-bg-primary me-1')
             .text(group + ' ')
-            .append($('<i class="fa fa-times remove-group ml-1">'));
+            .append($('<i class="bi bi-x-lg remove-group ms-1" title="Remove from group">'));
         $groupCell.append($badge).append(' ');
     });
     $groupCell.append(
         $('<span>')
-            .addClass('badge badge-secondary add-group')
-            .append($('<i class="fa fa-plus">'))
+            .addClass('badge text-bg-secondary add-group')
+            .attr('title', 'Add to a group')
+            .append($('<i class="bi bi-plus-lg">'))
     );
 
     const $statusCell = $row.find('.status').empty();
     $statusCell.append(
         $('<span>')
             .addClass('badge')
-            .addClass(user.status === 'active' ? 'badge-success' : 'badge-secondary')
+            .addClass(user.status === 'active' ? 'text-bg-success' : 'text-bg-secondary')
             .attr('title', user.status === 'active'
                 ? 'User has a password or valid token'
                 : 'User has no valid credentials')

@@ -11,21 +11,19 @@ class ProfileModal {
       <div class="modal-content">
           <div class="modal-header">
               <h5 class="modal-title" id="profileModalLabel">Your Profile</h5>
-              <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                  <span aria-hidden="true">&times;</span>
-              </button>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
           </div>
           <div class="modal-body">
               <form id="profileForm">
                 <input type="text" name="username" id="username" value="<!-- current username -->" autocomplete="username" readonly hidden>
-                  <div class="form-group">
+                  <div class="mb-3">
                       <label for="newPassword">New Password</label>
                       <input type="password" class="form-control" id="newPassword" name="newPassword" placeholder="Enter new password" autocomplete="new-password" required>
                   </div>
               </form>
           </div>
           <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
               <button type="submit" class="btn btn-primary" id="updateProfileButton">Update</button>
           </div>
       </div>

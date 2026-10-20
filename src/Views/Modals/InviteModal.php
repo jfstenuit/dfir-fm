@@ -10,20 +10,18 @@ class InviteModal {
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="inviteModalLabel">Invite User or Guest</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
                 <form id="inviteForm">
                     <!-- Email Address Input -->
-                    <div class="form-group">
+                    <div class="mb-3">
                         <label for="inviteEmail">Email Address</label>
                         <input type="email" class="form-control" id="inviteEmail" name="inviteEmail" placeholder="Enter email address" required>
                     </div>
                     
                     <!-- Access Rights Options -->
-                    <div class="form-group">
+                    <div class="mb-3">
                         <label>Access Rights</label>
                         <div class="form-check">
                             <input type="checkbox" class="form-check-input" id="accessRead" name="accessRights[]" value="read">
@@ -40,14 +38,14 @@ class InviteModal {
                     </div>
                     
                     <!-- Send Invitation Checkbox -->
-                    <div class="form-group form-check">
+                    <div class="mb-3 form-check">
                         <input type="checkbox" class="form-check-input" id="sendLink" name="sendLink" checked>
                         <label class="form-check-label" for="sendLink">Send Invitation Link</label>
                     </div>
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 <button type="button" class="btn btn-primary" id="sendInviteButton">Send Invite</button>
             </div>
         </div>

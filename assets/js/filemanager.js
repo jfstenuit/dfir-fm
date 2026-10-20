@@ -78,7 +78,7 @@ function initDataTable() {
             order: [[0, 'asc']],
             columnDefs: [
                 { targets: 0, name: 'name', width: '30%', className: 'file-name' },
-                { targets: 1, name: 'size', width: '4%', className: 'file-size text-right' },
+                { targets: 1, name: 'size', width: '4%', className: 'file-size text-end' },
                 { targets: 2, name: 'created_at', width: '12%' },
                 { targets: 3, name: 'created_by_from', width: '12%' },
                 { targets: 4, name: 'sha256', width: '10%', orderable: false, className: 'checksum' },
@@ -254,8 +254,8 @@ function addFileRow(newFile) {
             data-id="${newFile.id}"
             data-type="f"
             data-name="${escapeHtml(newFile.name)}">
-            <a href="#" class="delete-action" data-toggle="modal" data-target="#deleteConfirmModal">
-                <i class="fa fa-trash"></i>
+            <a href="#" class="delete-action" title="Delete" data-bs-toggle="modal" data-bs-target="#deleteConfirmModal">
+                <i class="bi bi-trash" aria-hidden="true"></i>
             </a>
         </td>
     `);
@@ -282,7 +282,7 @@ function createFolder() {
                 const encodedPath = encodeURIComponent(fullPath);
 
                 const $tr = $('<tr>');
-                $tr.append(`<td><a href="?p=${encodedPath}"><i class="fa fa-folder mr-1"></i>${escapeHtml(folderName)}</a></td>`);
+                $tr.append(`<td><a href="?p=${encodedPath}"><i class="bi bi-folder me-1" aria-hidden="true"></i>${escapeHtml(folderName)}</a></td>`);
                 $tr.append(`<td></td>`);
                 $tr.append(`<td>${escapeHtml(data.folder.created_at)}</td>`);
                 $tr.append(`<td>${escapeHtml(data.folder.created_by)}<br>${escapeHtml(data.folder.created_from)}</td>`);
@@ -292,8 +292,8 @@ function createFolder() {
                         data-id="${data.folder.id}"
                         data-type="d"
                         data-name="${escapeHtml(folderName)}">
-                        <a href="#" class="delete-action" data-toggle="modal" data-target="#deleteConfirmModal">
-                            <i class="fa fa-trash"></i>
+                        <a href="#" class="delete-action" title="Delete" data-bs-toggle="modal" data-bs-target="#deleteConfirmModal">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
                         </a>
                     </td>
                 `);

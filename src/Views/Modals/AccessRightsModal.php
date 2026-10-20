@@ -12,9 +12,7 @@ class AccessRightsModal {
 
       <div class="modal-header">
         <h5 class="modal-title" id="accessRightsModalLabel">Manage Access Rights</h5>
-        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-          <span aria-hidden="true">&times;</span>
-        </button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
 
       <div class="modal-body">
@@ -22,7 +20,7 @@ class AccessRightsModal {
         <!-- Access Rights Table -->
         <div class="table-responsive mb-4">
           <table class="table table-bordered table-striped" id="groupAccessTable">
-            <thead class="thead-light">
+            <thead class="table-light">
               <tr>
                 <th style="width: 35%;">Group</th>
                 <th style="width: 10%;">Read</th>
@@ -45,7 +43,7 @@ class AccessRightsModal {
                     </td>
                     <td class="text-center">
                         <button class="btn btn-sm btn-danger remove-group" title="Remove group access">
-                            <i class="fa fa-trash"></i>
+                            <i class="bi bi-trash" aria-hidden="true"></i>
                         </button>
                     </td>
                 </tr>
@@ -55,13 +53,13 @@ class AccessRightsModal {
         </div>
 
         <!-- Add Group with Typeahead -->
-        <form id="addGroupForm" class="form-inline">
-          <div class="form-group mb-2 mr-2">
-            <label for="groupNameInput" class="sr-only">Group Name</label>
+        <form id="addGroupForm" class="d-flex flex-wrap gap-2 mb-2">
+          <div>
+            <label for="groupNameInput" class="visually-hidden">Group Name</label>
             <input type="text" class="form-control" id="groupNameInput" placeholder="Start typing group name..." autocomplete="off">
           </div>
           <input type="hidden" id="cwdInput" name="cwd" value="<?php echo rtrim($cwd, '/'); ?>">
-          <button type="submit" class="btn btn-primary mb-2">Add Group</button>
+          <button type="submit" class="btn btn-primary">Add Group</button>
         </form>
 
         <small class="text-muted">If no match is found, the group will be created automatically.</small>
@@ -69,7 +67,7 @@ class AccessRightsModal {
       </div>
 
       <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
       </div>
 
     </div>
