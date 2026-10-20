@@ -31,6 +31,20 @@ class Config
     }
 
     /**
+     * The SQLite database file: database_path, or storage/database/app.sqlite
+     * under the application directory. A relative path is relative to the
+     * application directory.
+     */
+    public static function databasePath(array $config, string $basePath): string
+    {
+        $path = trim($config['database_path'] ?? '');
+        if ($path === '') {
+            return $basePath . '/storage/database/app.sqlite';
+        }
+        return str_starts_with($path, '/') ? $path : $basePath . '/' . $path;
+    }
+
+    /**
      * Parse KEY=value lines. Blank lines and lines starting with # are
      * skipped; a value wrapped in matching single or double quotes is
      * unquoted. A # inside a value is kept (passwords may contain one).

@@ -20,7 +20,6 @@ if (PHP_SAPI !== 'cli') {
 }
 
 define('BASE_PATH', dirname(__DIR__));
-define('STORAGE_PATH', BASE_PATH . '/storage');
 define('ENV_FILE', BASE_PATH . '/.env');
 
 require_once BASE_PATH . '/vendor/autoload.php';
@@ -34,7 +33,7 @@ try {
     $config = Config::load(ENV_FILE);
     // Opened directly, without the migrations: this must also work when
     // migration v2 refuses to run
-    $db = new PDO('sqlite:' . STORAGE_PATH . '/database/app.sqlite', null, null, [
+    $db = new PDO('sqlite:' . Config::databasePath($config, BASE_PATH), null, null, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::SQLITE_ATTR_OPEN_FLAGS => PDO::SQLITE_OPEN_READONLY,
     ]);

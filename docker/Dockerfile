@@ -28,25 +28,31 @@ COPY docker/start.sh /usr/local/bin/start.sh
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-autoloader --no-interaction --no-progress
 
-# Application code, owned by root: the web server user only writes to storage/
+# Application code, owned by root and read-only for the web server user
 COPY index.php ./
 COPY src src/
 COPY assets assets/
 COPY bin bin/
 RUN composer dump-autoload --no-dev --optimize \
-    && mkdir -p storage/database storage/files storage/logs \
-    && chown -R www-data:www-data storage \
-    && chmod 750 storage storage/database storage/files storage/logs \
     && chmod 755 /usr/local/bin/start.sh
 
-# Configuration: DFIRFM_<key> variables override the keys of .env (a .env file
-# is optional when at least one is set). These are the container defaults;
-# docker-compose.yml shows the others.
-ENV DFIRFM_STORAGE_ENGINE=local \
-    DFIRFM_BASE_STORAGE_DIRECTORY=/var/www/html/storage/files \
-    DFIRFM_LOG_ENGINE=stderr
+# Data, outside the web root, owned by www-data (uid 82):
+#   /data/files     the evidence (base_storage_directory)
+#   /data/database  the SQLite database (database_path)
+#   /data/logs      the log file (log_file_path, with log_engine=file)
+RUN mkdir -p /data/files /data/database /data/logs \
+    && chown www-data:www-data /data/files /data/database /data/logs \
+    && chmod 750 /data/files /data/database /data/logs
 
-VOLUME ["/var/www/html/storage/database", "/var/www/html/storage/files"]
+# The three paths, inside the container. DFIRFM_<key> variables override the
+# keys of a mounted .env, so the same .env serves a host install and the
+# container: its host paths are ignored here. A .env is optional (these
+# variables are enough to start), and docker-compose.yml can override them.
+ENV DFIRFM_BASE_STORAGE_DIRECTORY=/data/files \
+    DFIRFM_DATABASE_PATH=/data/database/app.sqlite \
+    DFIRFM_LOG_FILE_PATH=/data/logs/dfir-fm.log
+
+VOLUME ["/data/files", "/data/database", "/data/logs"]
 
 EXPOSE 8080
 

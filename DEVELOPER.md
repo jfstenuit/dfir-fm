@@ -46,7 +46,7 @@ project-root/
 ├── .dockerignore              # Build context of the image: only what it needs
 ├── docker/                    # Container deployment (see "Docker")
 │   ├── Dockerfile             # PHP-FPM 8.4 (Alpine) + APCu + lighttpd
-│   ├── docker-compose.yml
+│   ├── docker-compose.yml     # Mounts chosen by files_dir and log_dir in .env
 │   ├── lighttpd.conf          # Routing equivalent to .htaccess, MIME types
 │   ├── php.ini                # Upload sizes for the 2 MiB chunks
 │   ├── php-fpm.conf           # Pool: localhost only, environment passed to PHP
@@ -93,7 +93,7 @@ project-root/
 │       └── LoginView.php
 ├── storage/                   # Created at runtime, not in git; must not be web-accessible
 │   ├── database/              # SQLite database files
-│   │   └── app.sqlite         # Main SQLite database
+│   │   └── app.sqlite         # Main SQLite database (default; database_path)
 │   ├── files/                 # Storage for uploaded files (local storage engine)
 │   │   └── .uploads/          # Staging: uploads in progress (reserved name)
 │   └── logs/                  # Log files (file log engine)
@@ -282,7 +282,7 @@ Database initialization is handled programmatically in `src/Core/Database.php`.
 - **v1:** adds `groups.is_admin` and flags group `id = 1`, the group the former hardcoded admin check trusted. It also locks the formerly seeded `admin` account if it still has the default password `admin`; the lock is reported in the PHP error log. Create a new administrator with `php bin/create-admin.php <username>`.
 - **v2:** replaces the v1 `uploads` table (in-progress v1 uploads are discarded; their partial files, left at their final path by the v1 code, are listed in the PHP error log) with `uploads` and `upload_chunks`, and adds the unique indexes `files(directory_id, name)` and `files(directory_id, sha256)`. The v1 upload code could create two rows for one name; the migration never drops such evidence records. If it finds any, it stops, lists them in the PHP error log, and the application refuses to run until an operator resolves them. `bin/check-integrity.php` lists them too, along with stored files that no longer match their hash.
 
-To add a migration, add a `if ($version < N)` block in `migrate()` that ends with `PRAGMA user_version = N`. Back up `storage/database/app.sqlite` before upgrading.
+To add a migration, add a `if ($version < N)` block in `migrate()` that ends with `PRAGMA user_version = N`. Back up the database file (`database_path`, by default `storage/database/app.sqlite`) before upgrading.
 
 No user is seeded. A fresh install has an empty admin group: create the first administrator with `bin/create-admin.php`.
 
@@ -426,10 +426,20 @@ Besides reading, uploads need a **staging** area (`stagingCreate`, `stagingWrite
 
 - **Processes:** PHP-FPM (listening on 127.0.0.1:9000 only) and lighttpd on port **8080**, both started in the foreground by `docker/start.sh`. When either exits, the script stops the other and exits, so the container stops and its restart policy applies.
 - **Routing:** `docker/lighttpd.conf` mirrors `.htaccess`: the same static allowlist, 404 for `storage/`, `src/`, `bin/`, `docker/`, `tests/`, dotfiles and the rest of `assets/` and `vendor/`, everything else to `index.php`. lighttpd has no default MIME types: the file lists one per served extension, including `.mjs` (browsers refuse a module script with another type).
-- **Configuration:** `DFIRFM_*` environment variables (see "Configuration"); PHP-FPM passes them to PHP (`clear_env = no`). The image sets `DFIRFM_STORAGE_ENGINE=local`, `DFIRFM_BASE_STORAGE_DIRECTORY=/var/www/html/storage/files` and `DFIRFM_LOG_ENGINE=stderr`; the compose file holds the mail settings. A `.env` can be mounted read-only instead, but variables override its keys.
-- **Storage:** `storage/database` and `storage/files` are volumes, owned by `www-data` (uid 82 on Alpine). A host directory used instead must be owned by that uid. Sessions live in the container's `/tmp`: a restart logs everyone out.
-- **Logs:** lighttpd's access log on stdout; the application's JSON events on stderr, through PHP-FPM (`log_limit` raised so that lines aren't cut).
-- **Code:** owned by root and read-only for `www-data`, who only writes to `storage/`. Dependencies are installed with `composer install --no-dev`.
+- **Configuration:** `docker/.env`, created by the administrator from `.env.sample` (the same keys as a host install, plus its "Docker" section uncommented). It is not in git (`.gitignore`) and the repository ships no copy of it. It is mounted read-only as the application's `.env`; Compose refuses to start if it is missing, rather than creating a directory in its place. It must be readable by the container's `www-data`, uid/gid 82 (Alpine), not the host's (33 on Debian): `chgrp 82 docker/.env` with mode `640`. PHP-FPM passes the environment to PHP (`clear_env = no`), so a `DFIRFM_*` variable added to the compose file overrides a key.
+- **Compose reads `docker/.env` too:** it loads the `.env` of the compose file's directory for every command. Two keys, ignored by the application, choose the mounts: `files_dir` and `log_dir`. A volume source that is an absolute path is a bind mount, a plain name is a named volume, so `${files_dir:-dfir-fm-files}` gives the host directory when the key is set and a volume otherwise. Compose expands `$` in unquoted or double-quoted values while reading the file: it only warns, the application still reads the file as written; single quotes avoid the warnings.
+- **Paths:** the image sets the three paths to its own locations, outside the web root, through `DFIRFM_*` variables, which win over the `.env`'s host paths:
+
+  | Key | In the container | Mounted from |
+  |---|---|---|
+  | `base_storage_directory` | `/data/files` | `files_dir` if set (a host directory owned by uid 82), otherwise the volume `dfir-fm-files`. Nothing to set with a storage engine that doesn't use local files. |
+  | `database_path` | `/data/database/app.sqlite` | always the volume `dfir-fm-database` (back it up) |
+  | `log_file_path` | `/data/logs/dfir-fm.log` | `log_dir` if set (a host directory owned by uid 82), otherwise the volume `dfir-fm-logs`, disposable: `docker volume rm dfir-fm-logs`; never `docker compose down -v`, which also removes the database |
+
+  Host directories must exist before the first start (`sudo install -d -o 82 -g 82 -m 750 <dir>`): Docker would create a missing one owned by root, which the application can't write to.
+  Sessions live in the container's `/tmp`: a restart logs everyone out.
+- **Logs:** with `log_engine=file` (the default), in `/data/logs`. With `log_engine=stderr` (in the `.env`, or as `DFIRFM_LOG_ENGINE` in the compose file to keep a file on a host install), the JSON events go to the container output through PHP-FPM (`log_limit` raised so that lines aren't cut). `syslog` has no daemon to talk to in the container. lighttpd's access log goes to stdout.
+- **Code:** owned by root and read-only for `www-data`, who only writes to `/data`. Dependencies are installed with `composer install --no-dev`.
 - **First administrator:** `docker compose exec -u www-data app php bin/create-admin.php you@yourdomain.com`.
 - **HTTP only:** the compose file publishes the port on 127.0.0.1. Put a TLS-terminating reverse proxy in front and set `trusted_proxies` (and `force_https` if needed).
 

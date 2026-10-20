@@ -15,7 +15,6 @@ if (PHP_SAPI !== 'cli') {
 }
 
 define('BASE_PATH', dirname(__DIR__));
-define('STORAGE_PATH', BASE_PATH . '/storage');
 define('ENV_FILE', BASE_PATH . '/.env');
 
 require_once BASE_PATH . '/vendor/autoload.php';
@@ -29,7 +28,7 @@ use Services\ChunkedUpload;
 
 try {
     $config = Config::load(ENV_FILE);
-    $db = Database::initialize(STORAGE_PATH . '/database/app.sqlite');
+    $db = Database::initialize(Config::databasePath($config, BASE_PATH));
     $logger = LogEngineFactory::create($config);
     App::setConfig($config);
     App::setDb($db);

@@ -95,6 +95,14 @@ final class ConfigTest extends TestCase
         $this->assertSame(['plain' => 'from-env'], Config::load("$this->dir/missing.env"));
     }
 
+    public function testDatabasePath(): void
+    {
+        $this->assertSame('/app/storage/database/app.sqlite', Config::databasePath([], '/app'));
+        $this->assertSame('/app/storage/database/app.sqlite', Config::databasePath(['database_path' => ' '], '/app'));
+        $this->assertSame('/data/database/app.sqlite', Config::databasePath(['database_path' => '/data/database/app.sqlite'], '/app'));
+        $this->assertSame('/app/db/app.sqlite', Config::databasePath(['database_path' => 'db/app.sqlite'], '/app'));
+    }
+
     public function testMissingFileWithoutOverridesRefused(): void
     {
         $this->expectExceptionMessage('Environment file not found');

@@ -24,6 +24,8 @@ final class TestServer
 
     public readonly string $root;
     public readonly string $url;
+    /** The SQLite file the instance uses (database_path) */
+    public readonly string $databasePath;
     public string $adminPassword = '';
 
     private $process = null;
@@ -56,6 +58,7 @@ final class TestServer
         ], $env);
         $lines = array_map(fn($k, $v) => "$k=$v", array_keys($settings), $settings);
         file_put_contents("$this->root/.env", implode("\n", $lines) . "\n");
+        $this->databasePath = \Core\Config::databasePath($settings, $this->root);
         touch("$this->root/app.log");
 
         if ($withFixtures) {
@@ -135,7 +138,7 @@ final class TestServer
     /** Direct access to the test instance's database, for fixtures */
     public function db(): \PDO
     {
-        return $this->pdo ??= new \PDO("sqlite:$this->root/storage/database/app.sqlite", null, null, [
+        return $this->pdo ??= new \PDO("sqlite:$this->databasePath", null, null, [
             \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
         ]);
     }

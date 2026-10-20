@@ -4,7 +4,6 @@
 // Define constants for the project paths
 define('BASE_PATH', __DIR__);
 define('SRC_PATH', BASE_PATH . '/src');
-define('STORAGE_PATH', BASE_PATH . '/storage');
 define('ENV_FILE', BASE_PATH . '/.env');
 
 // Security headers, sent first so that every response carries them
@@ -42,7 +41,7 @@ try {
 }
 
 // Initialize database
-$db = Database::initialize(STORAGE_PATH . '/database/app.sqlite');
+$db = Database::initialize(Config::databasePath($config, BASE_PATH));
 
 // Initialize logger
 $logEngine = LogEngineFactory::create($config);
