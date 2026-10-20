@@ -140,12 +140,19 @@ class Request
         // Get the host
         $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
 
-        // Get the script's directory (to account for subdirectories)
-        $scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
-        $scriptDir = rtrim(dirname($scriptName), '/');
+        return $scheme . $host . self::getBasePath();
+    }
 
-        // Construct and return the base URL
-        return $scheme . $host . $scriptDir;
+    /**
+     * URL path the application is installed under, without trailing slash:
+     * '' at the web root, '/dfir-fm' in a subdirectory. Taken from the front
+     * controller's SCRIPT_NAME, not REQUEST_URI, whose dirname is wrong at the
+     * web root ('/' → '//' is a protocol-relative URL) and for nested routes.
+     */
+    public static function getBasePath(): string
+    {
+        $dir = str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/'));
+        return $dir === '.' ? '' : rtrim($dir, '/');
     }
 
     public static function isTrustedProxy(?string $ip): bool

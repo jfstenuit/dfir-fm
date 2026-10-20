@@ -349,7 +349,8 @@ class AccessMiddleware
         $cwd = rtrim($directoryInfo['path'], '/');
         $cwdPrefix = $cwd === '' ? '/' : $cwd . '/';
 
-        $accessRights = self::checkAccess($db, $cwd, $userId);
+        // The stored path, not $cwd: at the root $cwd is '' and no directory has that path
+        $accessRights = self::checkAccess($db, $directoryInfo['path'], $userId);
 
         if (isset($accessRights['is_admin']) && $accessRights['is_admin']) {
             return self::getAdminDirectoryItems($db, $userId, $directoryInfo);

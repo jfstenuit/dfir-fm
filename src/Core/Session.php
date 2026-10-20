@@ -33,8 +33,7 @@ class Session
      */
     private static function cookiePath(): string
     {
-        $dir = str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/'));
-        return rtrim($dir, '/') . '/';
+        return Request::getBasePath() . '/';
     }
 
     public static function getCsrfToken(): string {

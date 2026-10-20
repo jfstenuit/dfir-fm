@@ -7,7 +7,7 @@ This document outlines the technical structure and internal workings of the DFIR
 The application uses a single entrypoint: `index.php`. It handles routing manually and initializes all required components (middleware, controller dispatch, view rendering).
 
 Command-line tools live in `bin/` and refuse to run outside the CLI SAPI:
-- `php bin/create-admin.php <username>`: creates an administrator (or resets an existing user's password and adds them to the admin group) and prints a random password once. This is how the first administrator is created; no default account exists. It's a temporary tool until admin login moves to OIDC (see `PLAN.md`, Phase 2b).
+- `php bin/create-admin.php <username>`: creates an administrator (or resets an existing user's password and adds them to the admin group) and prints a random password once. This is how the first administrator is created; no default account exists. It's also the break-glass tool when every administrator is locked out: it needs shell access only, and no identity provider.
 - `php bin/send-test-mail.php <recipient>`: sends a test e-mail through the configured mail engine, exactly as invitations are sent. Exit code 0 when the engine accepted the message, 1 with the reason on stderr otherwise. Run it as the web server user (e.g. `sudo -u www-data php bin/send-test-mail.php …`) to also check its permissions.
 
 Middleware (such as authentication or CSRF protection) must be applied explicitly per route.
@@ -92,7 +92,6 @@ project-root/
 ├── .env                       # Environment variables (not in git)
 ├── .gitignore                 # Git ignore rules
 ├── DEVELOPER.md               # This document
-├── PLAN.md                    # Remediation & modernisation plan
 ├── LICENSE.md
 └── README.md                  # Documentation
 ```
@@ -348,7 +347,7 @@ The application uses an Interface/Factory pattern to dynamically select backends
 
 Mail is only used for invitation links. `MailEngineFactory::create()` reads the flat `.env` keys (see `.env.sample`) and throws `InvalidArgumentException` on a missing or invalid setting:
 - `mail` (default): PHPMailer with `isMail()`, i.e. the local sendmail binary. PHPMailer encodes headers and rejects header injection; `default_mail_from` is also the envelope sender (`-f`).
-- `smtp`: PHPMailer over SMTP. `smtp_secure=starttls|smtps|none` (STARTTLS is then required, not opportunistic; `none` disables TLS entirely, for local relays). Authentication only when `smtp_user` is set. `SMTPDebug` stays at 0: its output would end up in the HTTP response, and from level 2 it includes the `AUTH` exchange.
+- `smtp`: PHPMailer over SMTP. `smtp_secure=none|starttls|smtps`. Not set means `none` (plain SMTP, no opportunistic STARTTLS), except on port 465, which gets `smtps`. `starttls` is required, not opportunistic: the send fails if the server doesn't offer it. Authentication only when `smtp_user` is set. `SMTPDebug` stays at 0: its output would end up in the HTTP response, and from level 2 it includes the `AUTH` exchange.
 - `sendgrid`: SendGrid Web API v3. An HTTP status ≥ 400 counts as a failure, with SendGrid's error body in the reason.
 
 All engines send UTF-8 HTML with a plain-text alternative (`MailText::fromHtml()`), from `default_mail_from` / `default_mail_from_name`. `send()` returns `false` on failure and `lastError()` gives the reason; it doesn't throw. The caller logs failures as `mail_send_failure` (recipient, engine, error). An invitation whose e-mail fails still creates the contributor; the admin gets `success: false` with a generic message, and the details go to the log only.

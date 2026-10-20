@@ -94,5 +94,17 @@ final class SessionSecurityTest extends FeatureTestCase
         $this->server->db()->exec("UPDATE users SET invitation_token = 'invtok123', token_expiry = datetime('now', '+1 hour') WHERE username = 'bob@test.local'");
         $response = $this->client()->get('login', ['query' => ['email' => TestServer::BOB, 'token' => 'invtok123', 'directory' => '/']]);
         $this->assertSame(302, $response->status);
+        $this->assertSame('/?p=%2F', $response->header('Location'));
+    }
+
+    /** The test server runs at the web root, where redirects used to become '//' (protocol-relative) */
+    public function testRedirectsAtTheWebRoot(): void
+    {
+        $client = $this->client();
+        $this->assertSame('/', $client->login(TestServer::BOB, TestServer::BOB_PASSWORD)->json()['redirect']);
+        $withRedirect = $client->postWithCsrf('login', ['action' => 'login', 'username' => TestServer::BOB,
+            'password' => TestServer::BOB_PASSWORD, 'redirect' => '/admin'], 'login');
+        $this->assertSame('/admin', $withRedirect->json()['redirect']);
+        $this->assertSame('/', $client->get('logout')->header('Location'));
     }
 }

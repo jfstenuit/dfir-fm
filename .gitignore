@@ -51,6 +51,8 @@ composer.phar
 
 # AI assistant
 .claude
+CLAUDE.md
+PLAN.md
 
 # Storage location
 storage

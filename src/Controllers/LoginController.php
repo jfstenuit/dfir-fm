@@ -95,7 +95,7 @@ class LoginController
         Session::authenticate($user);
 
         // Redirect to the directory
-        $redirectPath = dirname($_SERVER['REQUEST_URI']) . '/?p=' . urlencode($directory);
+        $redirectPath = Request::getBasePath() . '/?p=' . urlencode($directory);
         header("Location: " . $redirectPath);
         exit;
     }
@@ -119,8 +119,8 @@ class LoginController
     
     public static function sanitizeRedirect($redirect)
     {
-        // Get the base path of the application (e.g., "/a/b")
-        $basePath = dirname($_SERVER['REQUEST_URI']);
+        // Base path of the application: "" at the web root, "/a/b" in a subdirectory
+        $basePath = Request::getBasePath();
 
         // Define valid redirect paths relative to the base path
         $validPaths = ['logout', 'admin'];
@@ -133,7 +133,7 @@ class LoginController
 
         // Extract the path from the parsed URL
         $redirectPath = isset($parsedUrl['path']) ? $parsedUrl['path'] : '';
-        if (!str_starts_with($redirectPath, $basePath)) {
+        if (!str_starts_with($redirectPath, $basePath . '/')) {
             return $basePath . '/'; // Redirect to root if the path doesn't start with the base path
         }
 

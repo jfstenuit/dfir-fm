@@ -2,6 +2,7 @@
 // src/Controllers/LogoutController.php
 namespace Controllers;
 
+use Core\Request;
 use Core\Session;
 use Core\App;
 
@@ -13,9 +14,7 @@ class LogoutController
 
         Session::logout();
 
-        // Construct the application root URL
-        $appRoot = dirname($_SERVER['REQUEST_URI']);
-        $redirectUrl = $appRoot . '/';
+        $redirectUrl = Request::getBasePath() . '/';
 
         header("Location: $redirectUrl");
         exit;

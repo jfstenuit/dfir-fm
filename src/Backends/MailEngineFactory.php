@@ -37,8 +37,8 @@ class MailEngineFactory {
                 $port = trim($config['smtp_port'] ?? '');
                 $secureSetting = strtolower(trim($config['smtp_secure'] ?? ''));
                 if ($secureSetting === '') {
-                    // Port 465 only speaks implicit TLS; anything else gets STARTTLS
-                    $secure = $port === '465' ? MailEnginePHPMailerSMTP::SECURE_SMTPS : MailEnginePHPMailerSMTP::SECURE_STARTTLS;
+                    // Not set: plain SMTP, except on port 465, which only speaks implicit TLS
+                    $secure = $port === '465' ? MailEnginePHPMailerSMTP::SECURE_SMTPS : MailEnginePHPMailerSMTP::SECURE_NONE;
                 } elseif (isset(self::SMTP_SECURE[$secureSetting])) {
                     $secure = self::SMTP_SECURE[$secureSetting];
                 } else {

@@ -68,12 +68,14 @@ final class MailEngineTest extends TestCase
     {
         // [settings, expected SMTPSecure, SMTPAutoTLS, Port]
         return [
-            'default: STARTTLS on 587' => [[], 'tls', true, 587],
+            'default: plain SMTP on 25' => [[], '', false, 25],
+            'default on another port: still plain' => [['smtp_port' => '587'], '', false, 587],
+            'starttls defaults to 587' => [['smtp_secure' => 'starttls'], 'tls', true, 587],
             'port 465 implies SMTPS' => [['smtp_port' => '465'], 'ssl', true, 465],
             'smtps defaults to 465' => [['smtp_secure' => 'smtps'], 'ssl', true, 465],
             'ssl alias' => [['smtp_secure' => 'SSL', 'smtp_port' => '2465'], 'ssl', true, 2465],
             'starttls on 25' => [['smtp_secure' => 'starttls', 'smtp_port' => '25'], 'tls', true, 25],
-            'tls alias' => [['smtp_secure' => 'tls'], 'tls', true, 587],
+            'tls alias' => [['smtp_secure' => 'TLS'], 'tls', true, 587],
             'none: no TLS at all' => [['smtp_secure' => 'none'], '', false, 25],
         ];
     }

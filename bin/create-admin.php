@@ -7,8 +7,8 @@
 // adds the user to the admin group and prints the password once.
 // The administrator should change it from the profile menu after logging in.
 //
-// Temporary bootstrap tool: replaced by bin/admin-recovery when admin
-// login moves to OIDC (PLAN.md, Phase 2b).
+// Also the break-glass tool: it works without the web interface and without
+// any identity provider, so it can restore access when every admin is locked out.
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
