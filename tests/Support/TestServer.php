@@ -238,7 +238,6 @@ final class TestServer
         $this->adminPassword = $m[1];
 
         $db = $this->db();
-        $db->exec("INSERT INTO directories (id, name, path, parent_id) VALUES (1, '', '/', NULL)");
         $db->prepare("INSERT INTO users (username, password) VALUES (:u, :p)")
            ->execute([':u' => self::BOB, ':p' => password_hash(self::BOB_PASSWORD, PASSWORD_DEFAULT)]);
     }

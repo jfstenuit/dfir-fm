@@ -49,6 +49,12 @@ class Database
                 }
             }
         }
+
+        // The root folder: every listing and access check starts from it.
+        // Nothing created it before, so on a fresh install "/" was a 404 for
+        // everyone, admins included.
+        self::$connection->exec("INSERT INTO directories (name, path, parent_id)
+                                 SELECT '', '/', NULL WHERE NOT EXISTS (SELECT 1 FROM directories WHERE path = '/')");
     }
 
     /** Current schema; CREATE ... IF NOT EXISTS, so it only adds what is missing */

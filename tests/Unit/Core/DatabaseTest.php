@@ -60,9 +60,12 @@ final class DatabaseTest extends TestCase
         $this->assertSame(1, self::scalar($db, 'SELECT COUNT(*) FROM groups WHERE is_admin = 1'));
         $this->assertSame(['user_id', 'group_id'], $db->query('PRAGMA table_info(user_group)')->fetchAll(PDO::FETCH_COLUMN, 1));
         $this->assertContains('email', $db->query('PRAGMA table_info(users)')->fetchAll(PDO::FETCH_COLUMN, 1));
+        $this->assertSame([['id' => 1, 'name' => '', 'path' => '/', 'parent_id' => null]],
+            $db->query("SELECT id, name, path, parent_id FROM directories")->fetchAll(PDO::FETCH_ASSOC), 'root folder created');
 
         $db = $this->init('fresh.sqlite');
         $this->assertSame(1, self::scalar($db, 'SELECT COUNT(*) FROM groups WHERE is_admin = 1'), 're-init is idempotent');
+        $this->assertSame(1, self::scalar($db, "SELECT COUNT(*) FROM directories WHERE path = '/'"), 'one root folder');
     }
 
     public function testLegacyMigration(): void

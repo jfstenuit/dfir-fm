@@ -35,7 +35,8 @@ final class ChunkedUploadTest extends TestCase
         (new \ReflectionProperty(Database::class, 'connection'))->setValue(null, null);
         $this->db = Database::initialize("$this->dir/app.sqlite");
         $this->db->exec("INSERT INTO users (id, username, password) VALUES (1, 'alice', '!'), (2, 'bob', '!'), (3, 'eve', '!')");
-        $this->db->exec("INSERT INTO directories (id, name, path, parent_id) VALUES (1, '', '/', NULL), (2, 'case', '/case', 1)");
+        // The root folder (id 1) is created by Database::initialize()
+        $this->db->exec("INSERT INTO directories (id, name, path, parent_id) VALUES (2, 'case', '/case', 1)");
         $this->db->exec("INSERT INTO groups (id, name) VALUES (10, 'investigators'), (11, 'contributors')");
         $this->db->exec("INSERT INTO user_group (user_id, group_id) VALUES (1, 10), (2, 11)");
         $this->db->exec("INSERT INTO access_rights (group_id, directory_id, can_view, can_write, can_upload)
