@@ -54,11 +54,13 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
      php bin/send-test-mail.php you@yourdomain.com
      ```
 
-4. (Optional) Run the application using Docker Compose:
+4. (Optional) Run the application with Docker Compose instead (no `composer install` or `.env` needed on the host: set the configuration in `docker/docker-compose.yml`):
    ```bash
-   docker-compose up
+   cd docker
+   docker compose up -d --build
+   docker compose exec -u www-data app php bin/create-admin.php you@yourdomain.com
    ```
-   The application will be available at `http://localhost:8000`.
+   The application is then available at `http://127.0.0.1:8080/`. Serve it to others through a TLS-terminating reverse proxy. See `DEVELOPER.md`, "Docker".
 
 ---
 

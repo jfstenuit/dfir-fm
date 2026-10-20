@@ -43,11 +43,14 @@ project-root/
 │   ├── send-test-mail.php     # Check the mail configuration
 │   ├── check-integrity.php    # Re-hash stored files against the database
 │   └── expire-uploads.php     # Expire abandoned uploads (cron)
-├── docker/                    # Container deployment
-│   ├── Dockerfile
+├── .dockerignore              # Build context of the image: only what it needs
+├── docker/                    # Container deployment (see "Docker")
+│   ├── Dockerfile             # PHP-FPM 8.4 (Alpine) + APCu + lighttpd
 │   ├── docker-compose.yml
-│   ├── lighttpd.conf
-│   └── .env.example
+│   ├── lighttpd.conf          # Routing equivalent to .htaccess, MIME types
+│   ├── php.ini                # Upload sizes for the 2 MiB chunks
+│   ├── php-fpm.conf           # Pool: localhost only, environment passed to PHP
+│   └── start.sh               # Runs both processes; stops when either exits
 ├── src/                       # Source code directory
 │   ├── Backends/              # Dynamically selected backends
 │   │   ├── LogEngine*.php     # Handles logging
@@ -180,7 +183,7 @@ The application now implements several layers of security to defend against comm
   A strict `Content-Security-Policy` header is emitted from `index.php`: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'`. No inline scripts or styles are allowed; `data:` images are the SVG icons in Bootstrap's own CSS. It is sent together with `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`, before anything else, so redirects and error pages carry them too. `.htaccess` sets the latter two for static files when `mod_headers` is available.
 
 - **Static files**  
-  `.htaccess` serves only existing static files (CSS, JS including `.mjs`, fonts, images) under `assets/` and the build folders of the three front-end packages (`vendor/twbs/bootstrap/dist/`, `vendor/twbs/bootstrap-icons/font/`, `vendor/enyo/dropzone/dist/`); anything else under `assets/` or `vendor/` is a 404, including PHP scripts, sources and build scripts shipped by Composer packages. `storage/`, `src/`, `bin/`, `docker/` and dotfiles are refused, and every other path goes through `index.php`. A front-end package added later needs its folder added there and in `tests/Support/router.php`.
+  `.htaccess` serves only existing static files (CSS, JS including `.mjs`, fonts, images) under `assets/` and the build folders of the three front-end packages (`vendor/twbs/bootstrap/dist/`, `vendor/twbs/bootstrap-icons/font/`, `vendor/enyo/dropzone/dist/`); anything else under `assets/` or `vendor/` is a 404, including PHP scripts, sources and build scripts shipped by Composer packages. `storage/`, `src/`, `bin/`, `docker/` and dotfiles are refused, and every other path goes through `index.php`. A front-end package added later needs its folder added there, in `tests/Support/router.php` and in `docker/lighttpd.conf`, which has the same rules (and a MIME type for each served extension).
 
 - **Downloads**  
   `Response::contentDisposition()` builds the `Content-Disposition` header: an ASCII fallback `filename` with quotes, backslashes, `%`, `;` and control characters replaced, plus the exact name in `filename*=UTF-8''…` (RFC 6266).
@@ -416,6 +419,19 @@ Besides reading, uploads need a **staging** area (`stagingCreate`, `stagingWrite
 **Environment overrides:** `DFIRFM_<KEY>` overrides or adds `<key>` (lowercased), e.g. `DFIRFM_STORAGE_ENGINE=local`. Unprefixed variables are ignored. `.env` may be absent only if at least one `DFIRFM_` variable is set, as in containers. Otherwise a missing file stops the application.
 
 **Permissions:** `.env` holds secrets and must be readable by the PHP user but not by everyone, e.g. owner you, group `www-data`, mode `640`. An unreadable `.env` stops the application with a 500 ("Environment file not readable"), rather than silently running on defaults as earlier versions did.
+
+## Docker
+
+`docker/docker-compose.yml` builds the image from the repository root (`.dockerignore` keeps `.env`, `storage/`, `vendor/` and `.git` out of the build context) and runs one container:
+
+- **Processes:** PHP-FPM (listening on 127.0.0.1:9000 only) and lighttpd on port **8080**, both started in the foreground by `docker/start.sh`. When either exits, the script stops the other and exits, so the container stops and its restart policy applies.
+- **Routing:** `docker/lighttpd.conf` mirrors `.htaccess`: the same static allowlist, 404 for `storage/`, `src/`, `bin/`, `docker/`, `tests/`, dotfiles and the rest of `assets/` and `vendor/`, everything else to `index.php`. lighttpd has no default MIME types: the file lists one per served extension, including `.mjs` (browsers refuse a module script with another type).
+- **Configuration:** `DFIRFM_*` environment variables (see "Configuration"); PHP-FPM passes them to PHP (`clear_env = no`). The image sets `DFIRFM_STORAGE_ENGINE=local`, `DFIRFM_BASE_STORAGE_DIRECTORY=/var/www/html/storage/files` and `DFIRFM_LOG_ENGINE=stderr`; the compose file holds the mail settings. A `.env` can be mounted read-only instead, but variables override its keys.
+- **Storage:** `storage/database` and `storage/files` are volumes, owned by `www-data` (uid 82 on Alpine). A host directory used instead must be owned by that uid. Sessions live in the container's `/tmp`: a restart logs everyone out.
+- **Logs:** lighttpd's access log on stdout; the application's JSON events on stderr, through PHP-FPM (`log_limit` raised so that lines aren't cut).
+- **Code:** owned by root and read-only for `www-data`, who only writes to `storage/`. Dependencies are installed with `composer install --no-dev`.
+- **First administrator:** `docker compose exec -u www-data app php bin/create-admin.php you@yourdomain.com`.
+- **HTTP only:** the compose file publishes the port on 127.0.0.1. Put a TLS-terminating reverse proxy in front and set `trusted_proxies` (and `force_https` if needed).
 
 ## Backend Extensibility
 

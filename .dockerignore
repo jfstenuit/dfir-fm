@@ -1,0 +1,14 @@
+# Docker build context (docker/docker-compose.yml builds from the repository
+# root): only what the image needs. Never .env, storage/, vendor/ or .git.
+*
+!index.php
+!composer.json
+!composer.lock
+!src/
+!assets/
+!bin/
+!docker/Dockerfile
+!docker/lighttpd.conf
+!docker/php.ini
+!docker/php-fpm.conf
+!docker/start.sh

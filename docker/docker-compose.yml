@@ -1,24 +1,44 @@
-version: '3.8'
+# DFIR FM. From this directory: docker compose up -d --build
+# Then create the first administrator (prints a random password once):
+#   docker compose exec -u www-data app php bin/create-admin.php you@yourdomain.com
 services:
   app:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    restart: unless-stopped
     ports:
-      - "8080:80"
+      # Plain HTTP: publish it on the loopback interface only and put a
+      # TLS-terminating reverse proxy in front (see trusted_proxies below)
+      - "127.0.0.1:8080:8080"
     volumes:
-      # Persist database data in a named volume
       - app-database:/var/www/html/storage/database
-      # Map /storage/files to a directory on the host
-      - ./storage/files:/var/www/html/storage/files
+      - app-files:/var/www/html/storage/files
+      # Or keep the files in a host directory, owned by the container's
+      # www-data user (uid 82): sudo chown 82:82 /srv/dfir-fm/files
+      # - /srv/dfir-fm/files:/var/www/html/storage/files
+      # Optional: a .env file. The DFIRFM_* variables below override its keys.
+      # - ../.env:/var/www/html/.env:ro
     environment:
-      - APP_ENV=local
-      - APP_DEBUG=true
+      # Configuration: DFIRFM_ + the .env key in capitals (see .env.sample).
+      # Set by the image: DFIRFM_STORAGE_ENGINE=local,
+      # DFIRFM_BASE_STORAGE_DIRECTORY=/var/www/html/storage/files, DFIRFM_LOG_ENGINE=stderr
+      DFIRFM_MAIL_ENGINE: smtp
+      DFIRFM_SMTP_HOST: smtp.yourdomain.com
+      DFIRFM_SMTP_SECURE: starttls
+      DFIRFM_SMTP_PORT: "587"
+      DFIRFM_SMTP_USER: your_smtp_username
+      DFIRFM_SMTP_PASSWORD: your_smtp_password
+      DFIRFM_DEFAULT_MAIL_FROM: no-reply@yourdomain.com
+      DFIRFM_DEFAULT_MAIL_FROM_NAME: DFIR-FM
+      # Behind a reverse proxy: its address(es), and true if it serves HTTPS only
+      DFIRFM_TRUSTED_PROXIES: ""
+      DFIRFM_FORCE_HTTPS: ""
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 volumes:
-  # Named volume for database persistence
   app-database:
+  app-files:
