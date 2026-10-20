@@ -1,11 +1,3 @@
-export function showResultMessage(message, isSuccess) {
-    $('#operationResultMessage')
-        .text(message)
-        .removeClass('text-success text-danger')
-        .addClass(isSuccess ? 'text-success' : 'text-danger');
-    $('#operationResultModal').modal('show');
-}
-
 export function initGroupTypeahead($input) {
     const groupNames = new Bloodhound({
         datumTokenizer: Bloodhound.tokenizers.whitespace,
@@ -30,32 +22,6 @@ export function initGroupTypeahead($input) {
     }, {
         name: 'groups',
         source: groupNames
-    });
-}
-
-export function updatePassword() {
-    const newPwd = $('#newPassword').val();
-
-    if (!newPwd) {
-        showResultMessage('Please enter a new password.', false);
-        return;
-    }
-
-    $.ajax({ url: 'profile', method: 'POST', dataType: 'json', data: {
-        a: 'updatePassword',
-        password: newPwd
-    }})
-    .done(response => {
-        if (response.success) {
-            showResultMessage(response.message || 'Password updated.', true);
-            $('#profileModal').modal('hide');
-            $('#newPassword').val('');
-        } else {
-            showResultMessage(response.message || 'Failed to update password.', false);
-        }
-    })
-    .fail(xhr => {
-        showResultMessage('Failed to update password: ' + xhr.statusText, false);
     });
 }
 
@@ -213,8 +179,44 @@ export function showModal(target) {
     bootstrap.Modal.getOrCreateInstance(resolve(target)).show();
 }
 
+/** Resolves once the modal is hidden (at once if it isn't shown) */
 export function hideModal(target) {
-    bootstrap.Modal.getOrCreateInstance(resolve(target)).hide();
+    const element = resolve(target);
+    return new Promise(done => {
+        if (!element?.classList.contains('show')) {
+            done();
+            return;
+        }
+        element.addEventListener('hidden.bs.modal', () => done(), { once: true });
+        setTimeout(done, 1000); // a modal still opening ignores hide(): don't wait forever
+        bootstrap.Modal.getOrCreateInstance(element).hide();
+    });
+}
+
+/** The operation-result dialog (on top of any open dialog) */
+export function showResultMessage(message, isSuccess) {
+    const body = document.getElementById('operationResultMessage');
+    body.textContent = message;
+    body.classList.remove('text-success', 'text-danger');
+    body.classList.add(isSuccess ? 'text-success' : 'text-danger');
+    showModal('#operationResultModal');
+}
+
+/** The profile dialog's password change */
+export async function updatePassword() {
+    const input = document.getElementById('newPassword');
+    if (!input.value) {
+        showResultMessage('Please enter a new password.', false);
+        return;
+    }
+    try {
+        const response = await api('profile', { data: { a: 'updatePassword', password: input.value } });
+        await hideModal('#profileModal');
+        input.value = '';
+        showResultMessage(response?.message || 'Password updated.', true);
+    } catch (error) {
+        showResultMessage(error.status === 200 ? error.message : 'Failed to update password: ' + error.message, false);
+    }
 }
 
 /**

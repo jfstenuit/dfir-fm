@@ -13,7 +13,7 @@ class NewFolderModal {
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <form id="newFolderForm">
+                <form id="newFolderForm" novalidate>
                     <div class="mb-3">
                         <label for="folderName">Folder Name</label>
                         <input type="text" class="form-control" id="folderName" name="folderName" placeholder="Enter folder name" required>
@@ -22,7 +22,7 @@ class NewFolderModal {
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary" id="createFolderButton">Create</button>
+                <button type="submit" form="newFolderForm" class="btn btn-primary" id="createFolderButton">Create</button>
             </div>
         </div>
     </div>

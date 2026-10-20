@@ -30,35 +30,17 @@ class AccessRightsModal {
               </tr>
             </thead>
             <tbody id="groupAccessTableBody">
-                <tr id="groupAccessRowTemplate" class="d-none">
-                    <td class="group-name"></td>
-                    <td class="text-center">
-                        <input type="checkbox" class="form-check-input access-read">
-                    </td>
-                    <td class="text-center">
-                        <input type="checkbox" class="form-check-input access-write">
-                    </td>
-                    <td class="text-center">
-                        <input type="checkbox" class="form-check-input access-upload">
-                    </td>
-                    <td class="text-center">
-                        <button class="btn btn-sm btn-danger remove-group" title="Remove group access">
-                            <i class="bi bi-trash" aria-hidden="true"></i>
-                        </button>
-                    </td>
-                </tr>
-              <!-- Rows will be injected by JavaScript -->
+              <!-- Rows built by filemanager.js -->
             </tbody>
           </table>
         </div>
 
-        <!-- Add Group with Typeahead -->
-        <form id="addGroupForm" class="d-flex flex-wrap gap-2 mb-2">
+        <!-- Add a group (suggestions: datalist from filemanager.js) -->
+        <form id="addGroupForm" class="d-flex flex-wrap gap-2 mb-2" novalidate>
           <div>
             <label for="groupNameInput" class="visually-hidden">Group Name</label>
             <input type="text" class="form-control" id="groupNameInput" placeholder="Start typing group name..." autocomplete="off">
           </div>
-          <input type="hidden" id="cwdInput" name="cwd" value="<?php echo rtrim($cwd, '/'); ?>">
           <button type="submit" class="btn btn-primary">Add Group</button>
         </form>
 

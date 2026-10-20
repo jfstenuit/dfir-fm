@@ -14,7 +14,7 @@ class ProfileModal {
               <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
           </div>
           <div class="modal-body">
-              <form id="profileForm">
+              <form id="profileForm" novalidate>
                 <input type="text" name="username" id="username" value="<!-- current username -->" autocomplete="username" readonly hidden>
                   <div class="mb-3">
                       <label for="newPassword">New Password</label>
@@ -24,7 +24,7 @@ class ProfileModal {
           </div>
           <div class="modal-footer">
               <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-              <button type="submit" class="btn btn-primary" id="updateProfileButton">Update</button>
+              <button type="submit" form="profileForm" class="btn btn-primary" id="updateProfileButton">Update</button>
           </div>
       </div>
   </div>

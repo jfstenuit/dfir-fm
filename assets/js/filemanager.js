@@ -1,99 +1,234 @@
-// assets/js/filemanager.js
+// assets/js/filemanager.js - The file manager page: listing, folders, uploads,
+// access rights, invitations, password change
 
-import { showResultMessage, initGroupTypeahead, updatePassword, escapeHtml, getCsrfToken } from './utils.js';
+import Dropzone from '../../vendor/enyo/dropzone/dist/dropzone.mjs';
+import { api, h, icon, on, hideModal, showResultMessage, updatePassword, groupAutocomplete } from './utils.js';
+import { sortableTable } from './sortable-table.js';
 
-let $groupAccessRowTemplate = null;
+const byId = id => document.getElementById(id);
 
-export function init() {
-    initDataTable();
-    initDropzone();
+let table = null;           // sortableTable() of #main-table
+let pendingDelete = null;   // {id, type, name}: picked in a row, confirmed in the dialog
 
-    document.querySelector('#createFolderButton')?.addEventListener('click', createFolder);
-    document.querySelector('#sendInviteButton')?.addEventListener('click', sendInvite);
-    document.querySelector('#addGroupForm')?.addEventListener('submit', handleAddGroup);
-    document.querySelector('#groupAccessTableBody')?.addEventListener('click', (e) => {
-        if (e.target.closest('.remove-group')) {
-            handleAccessRightsRemoveGroup(e);
-        }
-    });
-    document.querySelector('#groupAccessTableBody')?.addEventListener('change', (e) => {
-        if (e.target.matches('input[type="checkbox"]')) {
-            handleAccessRightsCheckboxToggle(e);
-        }
-    });
-
-    $('#accessRightsModal').on('show.bs.modal', function () {
-        loadAccessRights();
-        initGroupTypeahead($('#groupNameInput'));
-    });
-
-    // Enter in password field is sufficient to submit form
-    $('#newPassword').on('keypress', function (event) {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            updatePassword();
-        }
-    });
-
-    // Enter in new folder field is sufficient to submit form
-    $('#folderName').on('keypress', function (event) {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            createFolder();
-        }
-    });
-
-    // Handle the delete button click (in each row)
-    $('#main-table').on('click', '.delete-action', function () {
-        const $cell = $(this).closest('.inline-actions');
-        const id = $cell.data('id');
-        const type = $cell.data('type');
-        const name = $cell.data('name');
-    
-        // Store in modal attributes
-        const $modal = $('#deleteConfirmModal');
-        $modal.data('id', id);
-        $modal.data('type', type);
-        $modal.data('name', name);
-    
-        // Update modal UI
-        $('#deleteItemName').text(name);
-    });
-    
-    // Handle the confirm delete button click
-    $('#confirmDeleteButton').on('click', handleDelete);
-
-    // Handle the update profile (password change) button click
-    $('#updateProfileButton').on('click', updatePassword);
+/**
+ * The current directory as the server names it: "/" at the root, "/a/b"
+ * below. The page's #cwd is "" at the root, which the access-rights actions
+ * don't accept.
+ */
+function currentDirectory() {
+    return byId('cwd')?.value || '/';
 }
 
-function initDataTable() {
-    if (!$.fn.DataTable.isDataTable('#main-table')) {
-        $('#main-table').DataTable({
-            searching: false,
-            autoWidth: false,
-            paging: false,
-            info: false,
-            ordering: true,
-            order: [[0, 'asc']],
-            columnDefs: [
-                { targets: 0, name: 'name', width: '30%', className: 'file-name' },
-                { targets: 1, name: 'size', width: '4%', className: 'file-size text-end' },
-                { targets: 2, name: 'created_at', width: '12%' },
-                { targets: 3, name: 'created_by_from', width: '12%' },
-                { targets: 4, name: 'sha256', width: '10%', orderable: false, className: 'checksum' },
-                { targets: 5, name: 'actions', width: '4%', orderable: false, className: 'text-center inline-actions' }
-            ]
-        });
+const childPath = name => currentDirectory().replace(/\/$/, '') + '/' + name;
+
+export function init() {
+    table = sortableTable('#main-table', { column: 0 });
+    initDropzone();
+
+    // The dialogs' buttons submit their forms: Enter in a field does the same
+    byId('newFolderForm')?.addEventListener('submit', createFolder);
+    byId('inviteForm')?.addEventListener('submit', sendInvite);
+    byId('profileForm')?.addEventListener('submit', event => {
+        event.preventDefault();
+        updatePassword();
+    });
+
+    // Delete: the row's link opens the dialog (data-bs-toggle), this remembers the item
+    on('#main-table', 'click', '.delete-action', (event, link) => {
+        event.preventDefault();
+        const cell = link.closest('.inline-actions');
+        pendingDelete = { id: cell.dataset.id, type: cell.dataset.type, name: cell.dataset.name };
+        byId('deleteItemName').textContent = pendingDelete.name;
+    });
+    byId('confirmDeleteButton')?.addEventListener('click', deleteItem);
+
+    // Access rights dialog
+    byId('accessRightsModal')?.addEventListener('show.bs.modal', loadAccessRights);
+    groupAutocomplete('#groupNameInput');
+    byId('addGroupForm')?.addEventListener('submit', addGroup);
+    on('#groupAccessTableBody', 'change', 'input[type="checkbox"]', toggleRight);
+    on('#groupAccessTableBody', 'click', '.remove-group', removeGroup);
+}
+
+// ---------------------------------------------------------------------------
+// Listing rows (same markup as FileManagerView)
+// ---------------------------------------------------------------------------
+
+/** item: {type: 'f'|'d', id, name, size, date, by, from, sha256} */
+function itemRow(item) {
+    const path = encodeURIComponent(childPath(item.name));
+    const canDelete = byId('main-table').dataset.canDelete === '1';
+    return h('tr', {},
+        h('td', {}, h('div', { class: 'filename' },
+            h('a', { href: item.type === 'd' ? `?p=${path}` : `dl?p=${path}` },
+                item.type === 'd' ? icon('folder', 'me-1') : null, item.name))),
+        h('td', { class: 'text-end', dataset: { order: item.size ?? '' } }, item.size ?? ''),
+        h('td', { dataset: { order: item.date } }, item.date),
+        h('td', {}, item.by, h('br'), item.from),
+        h('td', { class: 'checksum', title: item.sha256 || null }, item.sha256 ?? ''),
+        h('td', { class: 'inline-actions text-center', dataset: { id: item.id, type: item.type, name: item.name } },
+            canDelete ? h('a', { href: '#', class: 'delete-action', title: 'Delete', 'data-bs-toggle': 'modal', 'data-bs-target': '#deleteConfirmModal' }, icon('trash')) : null,
+            ' ',
+            h('a', { title: 'Rename', href: '#' }, icon('pencil-square'))));
+}
+
+function addRow(item) {
+    byId('main-table').tBodies[0].append(itemRow(item));
+    table.refresh();
+}
+
+// ---------------------------------------------------------------------------
+// Folders and deletion
+// ---------------------------------------------------------------------------
+
+async function createFolder(event) {
+    event.preventDefault();
+    const input = byId('folderName');
+    const name = input.value.trim();
+    if (!name) {
+        showResultMessage('Folder name cannot be empty.', false);
+        return;
+    }
+    try {
+        const { folder } = await api('./', { data: { a: 'createFolder', name, cwd: currentDirectory() } });
+        await hideModal('#newFolderModal');
+        input.value = '';
+        addRow({ type: 'd', id: folder.id, name: folder.name, size: null, date: folder.created_at,
+                 by: folder.created_by, from: folder.created_from, sha256: null });
+    } catch (error) {
+        // The dialog stays open, to correct the name
+        showResultMessage(error.message, false);
     }
 }
 
+async function deleteItem() {
+    if (!pendingDelete) return;
+    const { id, type } = pendingDelete;
+    try {
+        await api('./', { data: { a: 'deleteItem', id, type } });
+        await hideModal('#deleteConfirmModal');
+        // Files and folders have separate ids: match both
+        document.querySelector(`#main-table .inline-actions[data-type="${CSS.escape(type)}"][data-id="${CSS.escape(id)}"]`)
+            ?.closest('tr').remove();
+    } catch (error) {
+        await hideModal('#deleteConfirmModal');
+        showResultMessage(error.message, false);
+    }
+    pendingDelete = null;
+}
+
+// ---------------------------------------------------------------------------
+// Invitations
+// ---------------------------------------------------------------------------
+
+async function sendInvite(event) {
+    event.preventDefault();
+    const emailInput = byId('inviteEmail');
+    const email = emailInput.value.trim();
+    if (!email) {
+        showResultMessage('Email address cannot be empty.', false);
+        return;
+    }
+    const accessRights = [...document.querySelectorAll('#inviteForm input[name="accessRights[]"]:checked')].map(box => box.value);
+    if (accessRights.length === 0) {
+        showResultMessage('Select at least one access right.', false);
+        return;
+    }
+    try {
+        await api('admin', { data: { a: 'invite', cwd: currentDirectory(), email, accessRights, sendLink: byId('sendLink').checked } });
+        await hideModal('#inviteModal');
+        emailInput.value = '';
+        showResultMessage('Invitation sent.', true);
+    } catch (error) {
+        showResultMessage(error.message, false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Access rights dialog
+// ---------------------------------------------------------------------------
+
+function rightsRow(group, rights = {}) {
+    const box = (name, checked) => h('td', { class: 'text-center' },
+        h('input', { type: 'checkbox', class: `form-check-input access-${name}`, checked: !!checked, 'aria-label': `${name}: ${group}` }));
+    return h('tr', { dataset: { group } },
+        h('td', { class: 'group-name' }, group),
+        box('read', rights.can_read),
+        box('write', rights.can_write),
+        box('upload', rights.can_upload),
+        h('td', { class: 'text-center' },
+            h('button', { type: 'button', class: 'btn btn-sm btn-danger remove-group', title: 'Remove group access' }, icon('trash'))));
+}
+
+async function loadAccessRights() {
+    const body = byId('groupAccessTableBody');
+    body.replaceChildren();
+    try {
+        const groups = await api('admin', { data: { a: 'listGroupPermissions', cwd: currentDirectory() } });
+        body.replaceChildren(...(groups ?? []).map(group => rightsRow(group.group, group)));
+    } catch (error) {
+        showResultMessage('Failed to load access rights: ' + error.message, false);
+    }
+}
+
+async function addGroup(event) {
+    event.preventDefault();
+    const input = byId('groupNameInput');
+    const name = input.value.trim();
+    const body = byId('groupAccessTableBody');
+    if (!name) {
+        showResultMessage('Group name cannot be empty.', false);
+        return;
+    }
+    if ([...body.rows].some(row => row.dataset.group === name)) {
+        showResultMessage('Group already assigned.', false);
+        return;
+    }
+    try {
+        await api('admin', { data: { a: 'createGroupIfNotExists', name, cwd: currentDirectory() } });
+        body.append(rightsRow(name));
+        input.value = '';
+    } catch (error) {
+        showResultMessage(error.message, false);
+    }
+}
+
+async function toggleRight(event, checkbox) {
+    const group = checkbox.closest('tr').dataset.group;
+    const right = ['read', 'write', 'upload'].find(name => checkbox.classList.contains(`access-${name}`));
+    checkbox.disabled = true;
+    try {
+        await api('admin', { data: { a: 'setAccessRight', group, cwd: currentDirectory(), right, value: checkbox.checked ? 1 : 0 } });
+    } catch (error) {
+        checkbox.checked = !checkbox.checked; // not saved: show the stored state
+        showResultMessage('Error updating right: ' + error.message, false);
+    } finally {
+        checkbox.disabled = false;
+    }
+}
+
+async function removeGroup(event, button) {
+    const row = button.closest('tr');
+    button.disabled = true;
+    try {
+        await api('admin', { data: { a: 'removeAccessRight', group: row.dataset.group, cwd: currentDirectory() } });
+        row.remove();
+    } catch (error) {
+        button.disabled = false;
+        showResultMessage('Error removing group: ' + error.message, false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Uploads (Dropzone; protocol in PLAN.md §3.4)
+// ---------------------------------------------------------------------------
+
 function initDropzone() {
-    if (!document.getElementById('fileUploader')) return;
+    const form = byId('fileUploader');
+    if (!form) return;
+    form.classList.add('dropzone');
 
-    $('#fileUploader').addClass('dropzone');
-
-    const dropzone = new Dropzone("#fileUploader", {
+    const dropzone = new Dropzone(form, {
         url: "upload",
         method: "post",
         // Every file goes through the chunked protocol, even a one-chunk or
@@ -105,14 +240,14 @@ function initDropzone() {
         // Safe: the server writes each chunk at its own offset
         retryChunks: true,
         retryChunksLimit: 3,
-        headers: { 'X-CSRF-TOKEN': getCsrfToken() },
+        headers: { 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content ?? '' },
         addRemoveLinks: true,
         dictRemoveFile: "Dismiss",
         dictCancelUploadConfirmation: "Cancel this upload?",
 
         // Refused before any byte is sent: rights, size, name already taken
         accept: function (file, done) {
-            uploadRequest({ a: 'checkRights', cwd: $('#cwd').val(), name: file.name, size: file.size })
+            uploadRequest({ a: 'checkRights', cwd: currentDirectory(), name: file.name, size: file.size })
                 .then(() => done(), error => done(error.message));
         },
 
@@ -136,7 +271,11 @@ function initDropzone() {
         init: function () {
             this.on("success", function (file) {
                 setUploadStage(file, 'Stored and verified');
-                addFileRow(file.uploadResult);
+                const stored = file.uploadResult;
+                if (stored) {
+                    addRow({ type: 'f', id: stored.id, name: stored.name, size: stored.size, date: stored.uploaded_at,
+                             by: stored.uploaded_by, from: stored.uploaded_from, sha256: stored.sha256 });
+                }
             });
 
             this.on("canceled", function (file) {
@@ -159,25 +298,11 @@ function initDropzone() {
 
 /**
  * POST to the upload endpoint. Resolves with the JSON body of a 2xx answer,
- * rejects with an Error carrying the server's message (and `status`, 0 for
+ * rejects with an ApiError carrying the server's message and `status` (0 for
  * a network failure).
  */
-async function uploadRequest(fields) {
-    let response;
-    try {
-        response = await fetch('upload', {
-            method: 'POST',
-            headers: { 'X-CSRF-TOKEN': getCsrfToken() },
-            body: new URLSearchParams(fields),
-        });
-    } catch (e) {
-        throw Object.assign(new Error('Network error.'), { status: 0 });
-    }
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-        throw Object.assign(new Error(body.message || `Server error (HTTP ${response.status}).`), { status: response.status });
-    }
-    return body;
+function uploadRequest(fields) {
+    return api('upload', { data: fields });
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -231,265 +356,8 @@ function setUploadStage(file, text) {
     if (!preview) return;
     let stage = preview.querySelector('.dz-stage');
     if (!stage) {
-        stage = document.createElement('div');
-        stage.className = 'dz-stage';
+        stage = h('div', { class: 'dz-stage' });
         preview.appendChild(stage);
     }
     stage.textContent = text;
-}
-
-function addFileRow(newFile) {
-    if (!newFile) return;
-    const cwd = $('#cwd').val();
-    const encodedPath = encodeURIComponent(cwd + '/' + newFile.name);
-    const table = $('#main-table').DataTable();
-    const $tr = $('<tr>');
-    $tr.append(`<td><a href="dl?p=${encodedPath}">${escapeHtml(newFile.name)}</a></td>`);
-    $tr.append(`<td data-order="${newFile.size}">${newFile.size}</td>`);
-    $tr.append(`<td data-order="${escapeHtml(newFile.uploaded_at)}">${escapeHtml(newFile.uploaded_at)}</td>`);
-    $tr.append(`<td>${escapeHtml(newFile.uploaded_by)}<br>${escapeHtml(newFile.uploaded_from)}</td>`);
-    $tr.append(`<td class="checksum" title="${newFile.sha256}">${newFile.sha256}</td>`);
-    $tr.append(`
-        <td class="inline-actions"
-            data-id="${newFile.id}"
-            data-type="f"
-            data-name="${escapeHtml(newFile.name)}">
-            <a href="#" class="delete-action" title="Delete" data-bs-toggle="modal" data-bs-target="#deleteConfirmModal">
-                <i class="bi bi-trash" aria-hidden="true"></i>
-            </a>
-        </td>
-    `);
-
-    table.row.add($tr).draw(false);
-}
-
-
-function createFolder() {
-    const folderName = $('#folderName').val().trim();
-    const cwd = $('#cwd').val();
-
-    if (!folderName) {
-        showResultMessage('Folder name cannot be empty.', false);
-        return;
-    }
-
-    $.ajax({ url: './', method: 'POST', dataType: 'json', data: { a: 'createFolder', name: folderName, cwd }})
-        .done(data => {
-            $('#newFolderModal').modal('hide');
-            if (data.success && data.folder) {
-                const table = $('#main-table').DataTable();
-                const fullPath = cwd.replace(/\/$/, '') + '/' + folderName;
-                const encodedPath = encodeURIComponent(fullPath);
-
-                const $tr = $('<tr>');
-                $tr.append(`<td><a href="?p=${encodedPath}"><i class="bi bi-folder me-1" aria-hidden="true"></i>${escapeHtml(folderName)}</a></td>`);
-                $tr.append(`<td></td>`);
-                $tr.append(`<td>${escapeHtml(data.folder.created_at)}</td>`);
-                $tr.append(`<td>${escapeHtml(data.folder.created_by)}<br>${escapeHtml(data.folder.created_from)}</td>`);
-                $tr.append(`<td class="checksum"></td>`);
-                $tr.append(`
-                    <td class="inline-actions"
-                        data-id="${data.folder.id}"
-                        data-type="d"
-                        data-name="${escapeHtml(folderName)}">
-                        <a href="#" class="delete-action" title="Delete" data-bs-toggle="modal" data-bs-target="#deleteConfirmModal">
-                            <i class="bi bi-trash" aria-hidden="true"></i>
-                        </a>
-                    </td>
-                `);
-
-                table.row.add($tr).draw(false);
-            } else {
-                showResultMessage(data.message || 'Failed to create folder.', false);
-            }
-        })
-        .fail(xhr => {
-            $('#newFolderModal').modal('hide');
-            showResultMessage('Error: ' + xhr.statusText, false);
-        });
-}
-
-function sendInvite() {
-    const email = $('#inviteEmail').val().trim();
-    const cwd = $('#cwd').val();
-
-    if (!email) {
-        showResultMessage('Email address cannot be empty.', false);
-        return;
-    }
-
-    const accessRights = [];
-    $('input[name="accessRights[]"]:checked').each(function () {
-        accessRights.push($(this).val());
-    });
-
-    if (accessRights.length === 0) {
-        showResultMessage('Select at least one access right.', false);
-        return;
-    }
-
-    const sendLink = $('#sendLink').is(':checked');
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: {
-        a: 'invite',
-        cwd,
-        email,
-        accessRights,
-        sendLink
-    }})
-    .done(data => {
-        $('#inviteModal').modal('hide');
-        showResultMessage(data.success ? 'Invitation sent.' : data.message || 'Failed.', data.success);
-    })
-    .fail(xhr => {
-        $('#inviteModal').modal('hide');
-        showResultMessage('Error: ' + xhr.statusText, false);
-    });
-}
-
-function handleDelete() {
-    const $modal = $('#deleteConfirmModal');
-    const id = $modal.data('id');
-    const type = $modal.data('type');
-    const name = $modal.data('name');
-    const cwd = $('#cwd').val();
-
-    $.ajax({ url: './', method: 'POST', dataType: 'json', data: {
-        a: 'deleteItem',
-        id: id,
-        type: type
-    }})
-        .done(function (data) {
-            $('#deleteConfirmModal').modal('hide');
-            if (data.success) {
-                // Remove the item from the DOM
-                const table = $('#main-table').DataTable();
-                table.rows().every(function () {
-                    const $row = $(this.node());
-                    const $actions = $row.find('.inline-actions');
-                    if ($actions.data('id') == id) {
-                        this.remove();
-                    }
-                });
-                table.draw();
-            } else {
-                showResultMessage(data.message || 'Failed to delete the item.', false);
-            }
-        })
-        .fail(function (xhr) {
-            $('#deleteConfirmModal').modal('hide');
-            showResultMessage('An error occurred: ' + xhr.statusText, false);
-        });
-}
-
-function loadAccessRights() {
-    const cwd = $('#cwd').val();
-    const $tbody = $('#groupAccessTableBody');
-
-    if (!$groupAccessRowTemplate) {
-        $groupAccessRowTemplate = $('#groupAccessRowTemplate').clone();
-    }
-
-    $tbody.empty();
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'listGroupPermissions', cwd }})
-        .done(groups => {
-            groups.forEach(group => {
-                const $row = $groupAccessRowTemplate.clone().removeClass('d-none').removeAttr('id');
-                $row.attr('data-group', group.group);
-                $row.find('.group-name').text(group.group);
-                $row.find('.access-read').prop('checked', group.can_read);
-                $row.find('.access-write').prop('checked', group.can_write);
-                $row.find('.access-upload').prop('checked', group.can_upload);
-                $tbody.append($row);
-            });
-        })
-        .fail(xhr => {
-            showResultMessage('Failed to load access rights: ' + xhr.statusText, false);
-        });
-}
-
-function handleAddGroup(event) {
-    event.preventDefault();
-
-    const groupName = $('#groupNameInput').val().trim();
-    const cwd = $('#cwdInput').val().trim();
-    const $tbody = $('#groupAccessTableBody');
-
-    if (!groupName) {
-        showResultMessage('Group name cannot be empty.', false);
-        return;
-    }
-
-    if ($tbody.find(`tr[data-group="${groupName}"]`).length > 0) {
-        showResultMessage('Group already assigned.', false);
-        return;
-    }
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'createGroupIfNotExists', name: groupName, cwd }})
-        .done(data => {
-            if (!data.success) {
-                showResultMessage(data.message || 'Failed to add group.', false);
-                return;
-            }
-
-            const $row = $groupAccessRowTemplate.clone().removeClass('d-none').removeAttr('id');
-            $row.attr('data-group', groupName);
-            $row.find('.group-name').text(groupName);
-            $row.find('.access-read, .access-write, .access-upload').prop('checked', false);
-
-            $tbody.append($row);
-            $('#groupNameInput').typeahead('val', '');
-        })
-        .fail(xhr => {
-            showResultMessage('Error: ' + xhr.statusText, false);
-        });
-}
-
-function handleAccessRightsCheckboxToggle(event) {
-    const $checkbox = $(event.target);
-    const $row = $checkbox.closest('tr');
-    const group = $row.data('group');
-    const cwd = $('#cwd').val();
-
-    let right = '';
-    if ($checkbox.hasClass('access-read')) right = 'read';
-    else if ($checkbox.hasClass('access-write')) right = 'write';
-    else if ($checkbox.hasClass('access-upload')) right = 'upload';
-
-    const value = $checkbox.is(':checked') ? 1 : 0;
-
-    if (!group || !right) {
-        showResultMessage('Invalid access right toggle.', false);
-        return;
-    }
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'setAccessRight', group, cwd, right, value }})
-        .fail(xhr => {
-            showResultMessage('Error updating right: ' + xhr.statusText, false);
-        });
-}
-
-function handleAccessRightsRemoveGroup(event) {
-    const $btn = $(event.target).closest('button');
-    const $row = $btn.closest('tr');
-    const group = $row.data('group');
-    const cwd = $('#cwd').val();
-
-    if (!group) {
-        showResultMessage('Invalid group.', false);
-        return;
-    }
-
-    $.ajax({ url: 'admin', method: 'POST', dataType: 'json', data: { a: 'removeAccessRight', group, cwd }})
-        .done(data => {
-            if (data.success) {
-                $row.remove();
-            } else {
-                showResultMessage(data.message || 'Failed to remove group.', false);
-            }
-        })
-        .fail(xhr => {
-            showResultMessage('Error removing group: ' + xhr.statusText, false);
-        });
 }

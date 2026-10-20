@@ -10,7 +10,7 @@ RewriteRule (^|/)\. - [R=404,L]
 # assets/ and vendor/: serve existing static files only. Anything else there
 # (PHP scripts shipped by Composer packages, READMEs, missing files) is a 404.
 RewriteCond %{REQUEST_FILENAME} -f
-RewriteRule ^(assets|vendor)/.+\.(css|js|map|woff2?|ttf|otf|eot|svg|png|jpe?g|gif|webp|ico)$ - [L]
+RewriteRule ^(assets|vendor)/.+\.(css|js|mjs|map|woff2?|ttf|otf|eot|svg|png|jpe?g|gif|webp|ico)$ - [L]
 RewriteRule ^(assets|vendor)(/|$) - [R=404,L]
 
 # Redirect all other requests to index.php

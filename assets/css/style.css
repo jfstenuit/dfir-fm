@@ -57,11 +57,14 @@ input[type="password"]:focus {
     box-shadow: 0 0 3px rgba(0, 123, 255, 0.5);
 }
 
-/* DataTables' stylesheet forces separate borders, which hides Bootstrap 5's
-   row borders. Goes with DataTables (Phase 4 step 4). */
-table.dataTable.table-bordered {
-    border-collapse: collapse !important;
-}
+/* File manager: column widths (fixed table layout; as DataTables rendered them) */
+#main-table              { margin: 6px 0; }
+#main-table .col-name    { width: 38%; }
+#main-table .col-size    { width: 8%; }
+#main-table .col-created { width: 17.5%; }
+#main-table .col-by      { width: 17.5%; }
+#main-table .col-sha256  { width: 13%; }
+#main-table .col-actions { width: 6%; }
 
 /* File manager */
 .main-nav {
@@ -190,13 +193,20 @@ a:hover {
     overflow-wrap: anywhere;
 }
 
-/* Sortable tables (assets/js/sortable-table.js) */
+/* Sortable tables (assets/js/sortable-table.js): the whole header cell is the
+   button, label at the start (end for right-aligned columns), arrow at the end */
 table.sortable .sort-button {
     all: unset;
+    box-sizing: border-box;
     cursor: pointer;
-    display: inline-flex;
+    display: flex;
+    width: 100%;
     align-items: center;
+    justify-content: space-between;
     gap: .25em;
+}
+table.sortable th.text-end .sort-button {
+    justify-content: flex-end;
 }
 table.sortable .sort-button:focus-visible {
     outline: 2px solid currentColor;
@@ -205,13 +215,15 @@ table.sortable .sort-button:focus-visible {
 table.sortable .sort-button::after {
     content: "\2195";   /* ↕ */
     opacity: .3;
-    font-size: .85em;
+    font-size: .75em;
 }
 table.sortable th[aria-sort="ascending"] .sort-button::after {
     content: "\25B2";   /* ▲ */
-    opacity: .8;
+    opacity: .7;
+    font-size: .65em;
 }
 table.sortable th[aria-sort="descending"] .sort-button::after {
     content: "\25BC";   /* ▼ */
-    opacity: .8;
+    opacity: .7;
+    font-size: .65em;
 }

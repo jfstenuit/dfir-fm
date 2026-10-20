@@ -14,12 +14,14 @@ class LoginView
 <div class="login-container">
     <h2>Please authenticate</h2>
 
-    <!-- Step 1: Email input (forms: Enter submits; handled by login.js, never sent as such) -->
+    <!-- Step 1: Email input (forms: Enter submits; handled by login.js, never sent as such).
+         The buttons start disabled: login.js enables them once it handles the forms,
+         so an early click or Enter can't submit them natively (email in the URL). -->
     <form id="step-login" novalidate>
         <div class="login-field">
             <input type="text" id="username" name="username" placeholder="Enter your email" autocomplete="username" required>
         </div>
-        <button type="submit" class="btn" id="nextBtn">Next</button>
+        <button type="submit" class="btn" id="nextBtn" disabled>Next</button>
     </form>
 
     <!-- Step 2: Password input -->
@@ -27,7 +29,7 @@ class LoginView
         <div class="login-field">
             <input type="password" id="password" name="password" placeholder="Enter your password" autocomplete="current-password" required>
         </div>
-        <button type="submit" class="btn" id="loginBtn">Login</button>
+        <button type="submit" class="btn" id="loginBtn" disabled>Login</button>
     </form>
 
     <!-- Step 3: Optional OIDC -->

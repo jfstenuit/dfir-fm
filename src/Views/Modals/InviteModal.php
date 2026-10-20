@@ -13,7 +13,7 @@ class InviteModal {
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <form id="inviteForm">
+                <form id="inviteForm" novalidate>
                     <!-- Email Address Input -->
                     <div class="mb-3">
                         <label for="inviteEmail">Email Address</label>
@@ -46,7 +46,7 @@ class InviteModal {
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary" id="sendInviteButton">Send Invite</button>
+                <button type="submit" form="inviteForm" class="btn btn-primary" id="sendInviteButton">Send Invite</button>
             </div>
         </div>
     </div>

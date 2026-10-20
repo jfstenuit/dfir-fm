@@ -100,3 +100,7 @@ stepPassword.addEventListener('submit', async event => {
 byId('oidcBtn')?.addEventListener('click', () => {
     window.location.href = 'login/oidc';
 });
+
+// Ready: the buttons are rendered disabled so that nothing submits natively before this point
+nextBtn.disabled = false;
+loginBtn.disabled = false;

@@ -44,18 +44,15 @@ class Layout
             [
                 self::BOOTSTRAP_CSS,
                 self::ICONS_CSS,
-                'vendor/datatables/datatables/media/css/dataTables.bootstrap4.min.css',
                 'vendor/enyo/dropzone/dist/dropzone.css',
                 'assets/css/style.css',
             ],
             [
                 self::JQUERY_JS,
                 self::BOOTSTRAP_JS,
-                'vendor/datatables/datatables/media/js/jquery.dataTables.min.js',
-                'vendor/datatables/datatables/media/js/dataTables.bootstrap4.min.js',
-                'vendor/enyo/dropzone/dist/dropzone-min.js',
                 'vendor/corejavascript/typeahead.js/dist/typeahead.bundle.min.js',
             ],
+            // filemanager.js imports Dropzone (dropzone.mjs) itself
             ['assets/js/site.js']
         );
     }
