@@ -2,185 +2,134 @@
 // src/Controllers/UploadController.php
 namespace Controllers;
 
-use Core\Session;
-use Core\Database;
 use Core\Request;
-use Core\Response;
 use Core\App;
 use Backends\StorageEngineFactory;
-use Middleware\AccessMiddleware;
-use PDO;
+use Services\ChunkedUpload;
+use Services\UploadException;
 
+/**
+ * POST /upload: Dropzone's chunked upload protocol. The upload logic is in
+ * Services\ChunkedUpload; this maps it to HTTP.
+ *
+ * Field `a` selects the action:
+ *   checkRights  probe before transfer: cwd, name, size
+ *   (none)       one chunk: file + Dropzone's dz* fields + cwd
+ *   complete     verify and commit (dzuuid); 202 while another request verifies
+ *   status       state and verification progress (dzuuid)
+ *   abort        cancel (dzuuid)
+ *
+ * Responses are JSON. Errors have a 4xx/5xx status and
+ * {"status":"error","code":…,"message":…}.
+ */
 class UploadController
 {
-
-    public static function handle($config,$db)
+    public static function handle($config, $db)
     {
         header('Content-Type: application/json');
+        header('Cache-Control: no-store');
 
-        $userId = $_SESSION['user_id'];
+        $userId = (int)$_SESSION['user_id'];
+        // Verification can take minutes: status polls must not queue behind
+        // it on PHP's session lock
+        session_write_close();
 
-        // Get the requested path from the query parameter `p`
-        $currentDirectory = !empty($_POST['cwd']) ? trim($_POST['cwd']) : '/';
-        $action = isset($_POST['a']) ? $_POST['a'] : null;
-
-        // Check that the current directory exist
-        $directoryInfo = AccessMiddleware::getDirectoryInfo($db, $currentDirectory);
-        if (!$directoryInfo) {
-            App::getLogger()->log('upload_failure', ['cause'=>'Invalid directory requested']);
-            echo json_encode(['status' => 'error', 'message' => 'Directory does not exist', 'hasPermission' => false]);
-            return;
-        }
-
-        // Verify user has access to the current directory
-        $accessRights = AccessMiddleware::checkAccess($db, $currentDirectory, $userId);
-        if (! ( $accessRights['can_write'] || $accessRights['can_upload'])) {
-            App::getLogger()->log('upload_failure', ['cause'=>'Access denied']);
-            echo json_encode(['status' => 'error', 'message' => 'Not authorized', 'hasPermission' => false]);
-            return;
-        }
-        
-        if ($action === 'checkRights') {
-            echo json_encode(['status' => 'success', 'message' => 'Authorized to upload in this directory', 'hasPermission' => true]);
-            return;
-        }
-
-        $directoryId = $directoryInfo['id'];
-
-        $storageEngine = StorageEngineFactory::create($config);
-        if (!$storageEngine->healthCheck()) {
-            error_log("Failed to get a handle on a Storage Engine");
-            Response::triggerSystemError();
-            return;
-        }
-
-        // Get the file details
-        $file = $_FILES['file'];
-        $chunkIndex = isset($_POST['dzchunkindex']) ? (int)$_POST['dzchunkindex'] : null;
-        $chunkCount = isset($_POST['dztotalchunkcount']) ? (int)$_POST['dztotalchunkcount'] : null;
-        $uuid = isset($_POST['dzuuid']) ? $_POST['dzuuid'] : uniqid();
-        $originalFileName = $file['name'];
-        $fileSize = isset($_POST['dztotalfilesize']) ? (int)$_POST['dztotalfilesize'] : null;
-
-        // Validate fields
-        if (!$uuid || $chunkIndex === null || $chunkCount === null || !$fileSize) {
-            App::getLogger()->log('upload_failure', ['cause'=>'Invalid upload parameters']);
-            echo json_encode(['status' => 'error', 'message' => 'Invalid upload parameters.']);
-            return;
-        }
-
-        // Handle upload state from DB
-        $stmt = $db->prepare("SELECT * FROM uploads WHERE uuid = :uuid");
-        $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
-        $stmt->execute();
-        $upload = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        $hashContext = null;
-        if (!$upload) {
-            // This is a new upload - create entry in DB, create storage
-            App::getLogger()->log('upload_start', ['file'=> $originalFileName, 'directory'=> $currentDirectory]);
-            $storagePath = rtrim($currentDirectory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $originalFileName;
-
-            $stmt = $db->prepare("
-                INSERT INTO uploads (uuid, file_name, file_size, total_chunks, last_chunk_index, hash_state, storage_path, status, user_id)
-                VALUES (:uuid, :file_name, :file_size, :total_chunks, -1, '', :storage_path, 'in_progress', :user_id)
-            ");
-            $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
-            $stmt->bindParam(':file_name', $originalFileName, PDO::PARAM_STR);
-            $stmt->bindParam(':file_size', $fileSize, PDO::PARAM_INT);
-            $stmt->bindParam(':total_chunks', $chunkCount, PDO::PARAM_INT);
-            $stmt->bindParam(':storage_path', $storagePath, PDO::PARAM_STR);
-            $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
-            $stmt->execute();
-            $upload = [
-                'uuid' => $uuid,
-                'last_chunk_index' => -1,
-                'storage_path' => $storagePath
-            ];
-            $hashContext = hash_init('sha256');
-            $storageEngine->createElement($storagePath);
-        } else {
-            // Check if the chunk index is out of sequence
-            if ($chunkIndex !== (int)$upload['last_chunk_index'] + 1) {
-                App::getLogger()->log('upload_failure', ['cause'=>'Chunk out of sequence']);
-                error_log("Chunk out of sequence : $chunkIndex (expected ".((int)$upload['last_chunk_index'] + 1).")");
-                echo json_encode(['status' => 'error', 'message' => 'Chunk out of sequence.']);
-                return;
+        try {
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                throw new UploadException(405, 'MethodNotAllowed', 'Use POST.');
             }
-            $hashContext = unserialize( $upload['hash_state'] );
-        }
 
-        // Append the chunk to the target file
-        $chunkData = file_get_contents($file['tmp_name']);
-        $storageEngine->writeAppend($upload['storage_path'], $chunkData);
+            // Over post_max_size, PHP drops the whole body: $_POST and $_FILES are empty
+            if (!$_POST && !$_FILES && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+                throw new UploadException(413, 'EntityTooLarge', 'The request is larger than the server accepts (PHP post_max_size).');
+            }
 
-        // Free the temporary file to release resources (maybe not necessary, but better safe than sorry)
-        if (is_file($file['tmp_name'])) {
-            unlink($file['tmp_name']);
-        }
+            $storage = StorageEngineFactory::create($config);
+            if (!$storage->healthCheck()) {
+                error_log("Failed to get a handle on a Storage Engine");
+                throw new UploadException(500, 'StorageError', 'The storage is unavailable.');
+            }
+            $uploads = new ChunkedUpload($db, $storage, App::getLogger(), $config, Request::getClientIp());
 
-        // Update the hash state
-        hash_update($hashContext, $chunkData);
-        $hashState = serialize( $hashContext );
+            $action = $_POST['a'] ?? null;
+            $uuid = (string)($_POST['dzuuid'] ?? '');
+            switch ($action) {
+                case 'checkRights':
+                    $size = $_POST['size'] ?? null;
+                    $uploads->probe($userId, $_POST['cwd'] ?? null,
+                        is_string($_POST['name'] ?? null) ? $_POST['name'] : null,
+                        is_string($size) && ctype_digit($size) ? (int)$size : null);
+                    self::respond(200, ['status' => 'success', 'message' => 'Authorized to upload in this folder']);
+                    break;
 
-        // Update the database with the latest chunk and hash state
-        $stmt = $db->prepare("
-            UPDATE uploads
-            SET last_chunk_index = :last_chunk_index, hash_state = :hash_state, last_update = CURRENT_TIMESTAMP
-            WHERE uuid = :uuid
-        ");
-        $stmt->bindParam(':last_chunk_index', $chunkIndex, PDO::PARAM_INT);
-        $stmt->bindParam(':hash_state', $hashState, PDO::PARAM_STR);
-        $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
-        $stmt->execute();
+                case null:
+                    self::respond(200, ['status' => 'progress'] + self::receiveChunk($uploads, $userId));
+                    break;
 
-        // If all chunks are uploaded, create entry
-        if ($chunkIndex == $chunkCount - 1) {
-            $finalFileSize  = $storageEngine->getSize($upload['storage_path']);
-            $checksum = hash_final($hashContext);
-            // $finfo = finfo_open(FILEINFO_MIME_TYPE);
-            // $mimeType = finfo_file($finfo, $targetFile);
-            // finfo_close($finfo);
-            $utcTimestamp = gmdate('Y-m-d H:i:s');
-            $remoteIp = Request::getClientIp();
+                case 'complete':
+                case 'status':
+                    // Both may run (or restart) the verification: let it finish
+                    // even if the client or a proxy gives up on this request
+                    ignore_user_abort(true);
+                    set_time_limit(0);
+                    $state = $action === 'complete' ? $uploads->complete($userId, $uuid) : $uploads->status($userId, $uuid);
+                    $code = $action === 'complete' && $state['status'] !== 'completed' ? 202 : 200;
+                    self::respond($code, $state + ['message' => 'Upload ' . $state['status']]);
+                    break;
 
-            $stmt = $db->prepare("
-            INSERT INTO files
-                (directory_id, name, uploaded_at, uploaded_by, uploaded_from, size, sha256)
-            VALUES
-                (:directory_id, :name, :uploaded_at, :uploaded_by, :uploaded_from, :size, :sha256)");
-            $stmt->bindParam(':directory_id', $directoryId, PDO::PARAM_INT);
-            $stmt->bindParam(':name', $originalFileName, PDO::PARAM_STR);
-            $stmt->bindParam(':uploaded_at', $utcTimestamp, PDO::PARAM_STR);
-            $stmt->bindParam(':uploaded_by', $userId, PDO::PARAM_INT);
-            $stmt->bindParam(':uploaded_from', $remoteIp, PDO::PARAM_STR);
-            $stmt->bindParam(':size', $fileSize, PDO::PARAM_INT);
-            $stmt->bindParam(':sha256', $checksum, PDO::PARAM_STR);
-            $stmt->execute();
-            
-            $fileId = $db->lastInsertId();
-            $userInfo = AccessMiddleware::getUserInfo($db, $userId);
+                case 'abort':
+                    self::respond(200, $uploads->abort($userId, $uuid));
+                    break;
 
-            // Mark the upload as completed
-            $stmt = $db->prepare("
-                UPDATE uploads
-                SET status = 'completed', last_update = CURRENT_TIMESTAMP
-                WHERE uuid = :uuid
-            ");
-            $stmt->bindParam(':uuid', $uuid, PDO::PARAM_STR);
-            $stmt->execute();
-
-            App::getLogger()->log('upload_completed', ['file'=> $originalFileName, 'directory'=> $currentDirectory, 'size'=>$fileSize, 'sha256'=>$checksum]);
-
-            echo json_encode(['status' => 'success', 'message' => 'File uploaded successfully.',
-                'file' => [ 'name' => $originalFileName, 'size' => $fileSize, 'sha256' => $checksum,
-                            'uploaded_at' => $utcTimestamp, 'uploaded_by' => $userInfo['username'],
-                            'uploaded_from' => $remoteIp, 'id' => $fileId ]
-            ]);
-        } else {
-            // If we are just in progress
-            echo json_encode(['status' => 'progress', 'message' => 'Chunk uploaded.']);
+                default:
+                    throw new UploadException(400, 'InvalidArgument', 'Unknown action.');
+            }
+        } catch (UploadException $e) {
+            self::respond($e->httpStatus, ['status' => 'error', 'code' => $e->errorCode, 'message' => $e->getMessage()] + $e->details);
+        } catch (\Throwable $e) {
+            error_log('Upload error: ' . $e);
+            self::respond(500, ['status' => 'error', 'code' => 'InternalError', 'message' => 'Internal error.']);
         }
     }
+
+    private static function receiveChunk(ChunkedUpload $uploads, int $userId): array
+    {
+        $file = $_FILES['file'] ?? null;
+        if (!is_array($file) || !is_int($file['error'] ?? null)) {
+            throw new UploadException(400, 'InvalidChunk', 'No file data in the request.');
+        }
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            throw match ($file['error']) {
+                UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE =>
+                    new UploadException(413, 'EntityTooLarge', 'The chunk is larger than the server accepts (PHP upload_max_filesize).'),
+                UPLOAD_ERR_PARTIAL, UPLOAD_ERR_NO_FILE =>
+                    new UploadException(400, 'InvalidChunk', 'The chunk was not received completely.'),
+                default =>
+                    new UploadException(500, 'ServerError', 'The server could not receive the chunk (PHP upload error ' . $file['error'] . ').'),
+            };
+        }
+        if (!is_uploaded_file($file['tmp_name'])) {
+            throw new UploadException(400, 'InvalidChunk', 'No file data in the request.');
+        }
+
+        // Streamed from PHP's temporary file to the storage, never read into memory
+        $stream = fopen($file['tmp_name'], 'rb');
+        if (!$stream) {
+            throw new UploadException(500, 'ServerError', 'The received chunk could not be read.');
+        }
+        try {
+            $fields = $_POST;
+            $fields['name'] = $file['name'];
+            return $uploads->receiveChunk($userId, $fields, $stream, (int)filesize($file['tmp_name']));
+        } finally {
+            fclose($stream);
+            @unlink($file['tmp_name']);
+        }
+    }
+
+    private static function respond(int $code, array $body): void
+    {
+        http_response_code($code);
+        echo json_encode($body);
+    }
 }
-?>

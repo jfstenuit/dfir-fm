@@ -10,6 +10,7 @@
             "Controllers\\": "src/Controllers/",
             "Models\\": "src/Models/",
             "Middleware\\": "src/Middleware/",
+            "Services\\": "src/Services/",
             "Views\\": "src/Views/"
         }
     },
@@ -27,7 +28,7 @@
         "components/bootstrap": "^4.6",
         "components/font-awesome": "^6.5",
         "datatables/datatables": "^1.10",
-        "enyo/dropzone": "^5.9",
+        "enyo/dropzone": "^6.3",
         "phpmailer/phpmailer": "^7.1",
         "sendgrid/sendgrid": "^8.1",
         "corejavascript/typeahead.js": "^1.3"

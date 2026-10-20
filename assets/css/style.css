@@ -192,3 +192,11 @@ a:hover {
     font-weight: 600;
   }
   
+/* Upload stage under each Dropzone preview (filemanager.js) */
+.dropzone .dz-preview .dz-stage {
+    width: 120px;
+    margin-top: .25rem;
+    font-size: .75rem;
+    text-align: center;
+    overflow-wrap: anywhere;
+}

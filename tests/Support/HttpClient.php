@@ -19,7 +19,7 @@ final class HttpClient
     }
 
     /**
-     * @param array{headers?: array<string,string>, form?: array<string,mixed>, query?: array<string,mixed>, raw?: string} $options
+     * @param array{headers?: array<string,string>, form?: array<string,mixed>, query?: array<string,mixed>, raw?: string, multipart?: array<string,string|\CURLStringFile>} $options
      */
     public function request(string $method, string $path, array $options = []): HttpResponse
     {
@@ -53,7 +53,9 @@ final class HttpClient
                 return strlen($line);
             },
         ]);
-        if (isset($options['form'])) {
+        if (isset($options['multipart'])) {
+            curl_setopt($curl, CURLOPT_POSTFIELDS, $options['multipart']); // multipart/form-data
+        } elseif (isset($options['form'])) {
             curl_setopt($curl, CURLOPT_POSTFIELDS, http_build_query($options['form']));
         } elseif (isset($options['raw'])) {
             curl_setopt($curl, CURLOPT_POSTFIELDS, $options['raw']);

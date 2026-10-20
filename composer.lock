@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "82b5466e8c7de6a5c27cb76c56489360",
+    "content-hash": "d871fc9c6763f4429624285eac31ebe5",
     "packages": [
         {
             "name": "components/bootstrap",
@@ -231,16 +231,16 @@
         },
         {
             "name": "enyo/dropzone",
-            "version": "v5.9.3",
+            "version": "v6.3.5",
             "source": {
                 "type": "git",
-                "url": "git@github.com:enyo/dropzone-packagist.git",
-                "reference": "286b2dc1f1195bd12169e4c9d5f91cfbe46e245f"
+                "url": "https://github.com/enyo/dropzone-packagist",
+                "reference": "ef582f48942635bb3bf30c2a50d80c10d4ea96f8"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/enyo/dropzone-packagist/zipball/286b2dc1f1195bd12169e4c9d5f91cfbe46e245f",
-                "reference": "286b2dc1f1195bd12169e4c9d5f91cfbe46e245f",
+                "url": "https://api.github.com/repos/enyo/dropzone-packagist/zipball/ef582f48942635bb3bf30c2a50d80c10d4ea96f8",
+                "reference": "ef582f48942635bb3bf30c2a50d80c10d4ea96f8",
                 "shasum": ""
             },
             "type": "library",
@@ -250,24 +250,20 @@
             ],
             "authors": [
                 {
-                    "name": "Matias Meno",
+                    "name": "Matias Simon",
                     "email": "m@tias.me",
-                    "homepage": "http://www.yesmeno.com"
+                    "homepage": "https://www.matsimon.dev"
                 }
             ],
             "description": "Handles drag and drop of files for you.",
-            "homepage": "http://www.dropzonejs.com",
+            "homepage": "https://www.dropzone.dev/",
             "keywords": [
                 "drag and drop",
                 "dragndrop",
                 "file upload",
                 "upload"
             ],
-            "support": {
-                "issues": "https://github.com/dropzone/dropzone-packagist/issues",
-                "source": "https://github.com/dropzone/dropzone-packagist/tree/v5.9.3"
-            },
-            "time": "2021-09-21T17:03:36+00:00"
+            "time": "2026-09-27T22:08:28+00:00"
         },
         {
             "name": "phpmailer/phpmailer",

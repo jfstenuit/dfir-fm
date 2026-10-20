@@ -55,7 +55,7 @@ final class DatabaseTest extends TestCase
     {
         $db = $this->init('fresh.sqlite');
 
-        $this->assertSame(1, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(2, self::scalar($db, 'PRAGMA user_version'));
         $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM users'), 'no seeded user');
         $this->assertSame(1, self::scalar($db, 'SELECT COUNT(*) FROM groups WHERE is_admin = 1'));
         $this->assertSame(['user_id', 'group_id'], $db->query('PRAGMA table_info(user_group)')->fetchAll(PDO::FETCH_COLUMN, 1));
@@ -116,5 +116,61 @@ final class DatabaseTest extends TestCase
         $db = $this->init('legacy3.sqlite');
         $this->assertSame(0, self::scalar($db, 'SELECT is_admin FROM groups WHERE id = 5'));
         $this->assertSame('administrators', $db->query('SELECT name FROM groups WHERE is_admin = 1')->fetchColumn());
+    }
+
+    /** A database as left by version 1 of the schema (v1 uploads table, no unique indexes) */
+    private function v1Database(string $name, callable $seed): void
+    {
+        $db = $this->init($name);
+        $db->exec("DROP TABLE uploads");
+        $db->exec("DROP TABLE upload_chunks");
+        $db->exec("DROP INDEX files_dir_name");
+        $db->exec("DROP INDEX files_dir_sha256");
+        $db->exec("CREATE TABLE uploads (uuid TEXT PRIMARY KEY, file_name TEXT NOT NULL, file_size INTEGER NOT NULL,
+            total_chunks INTEGER NOT NULL, last_chunk_index INTEGER NOT NULL DEFAULT 0, hash_state TEXT NOT NULL,
+            storage_path TEXT NOT NULL, status TEXT DEFAULT 'pending', last_update DATETIME, created_at DATETIME, user_id INTEGER NOT NULL)");
+        $db->exec("PRAGMA user_version = 1");
+        $seed($db);
+    }
+
+    public function testMigrationV2ReplacesTheV1UploadsTable(): void
+    {
+        $this->v1Database('v1.sqlite', function (PDO $db) {
+            $db->exec("INSERT INTO uploads (uuid, file_name, file_size, total_chunks, hash_state, storage_path, status, user_id)
+                       VALUES ('u1', 'half.bin', 10, 2, '', '/half.bin', 'in_progress', 1)");
+            $db->exec("INSERT INTO files (directory_id, name, size, sha256) VALUES (1, 'a', 1, 'aa'), (1, 'b', 1, NULL), (1, 'c', 1, NULL)");
+        });
+
+        $db = $this->init('v1.sqlite');
+        $this->assertSame(2, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertContains('client_uuid', $db->query('PRAGMA table_info(uploads)')->fetchAll(PDO::FETCH_COLUMN, 1));
+        $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM uploads'), 'v1 uploads discarded');
+        $this->assertSame(3, self::scalar($db, 'SELECT COUNT(*) FROM files'), 'files kept; NULL hashes may repeat');
+        $this->assertStringContainsString('partial file left in storage: /half.bin', (string)file_get_contents("$this->dir/php-errors.log"));
+
+        $this->expectException(\PDOException::class);
+        $db->exec("INSERT INTO files (directory_id, name, size) VALUES (1, 'a', 2)");
+    }
+
+    public function testMigrationV2StopsOnDuplicateFiles(): void
+    {
+        $this->v1Database('dup.sqlite', function (PDO $db) {
+            $db->exec("INSERT INTO files (directory_id, name, size, sha256) VALUES (1, 'dump.bin', 1, 'aa'), (1, 'dump.bin', 2, 'bb'),
+                       (2, 'x', 1, 'cc'), (2, 'y', 1, 'cc')");
+        });
+
+        try {
+            $this->init('dup.sqlite');
+            $this->fail('migration should stop');
+        } catch (\Exception $e) {
+            $this->assertStringContainsString('Migration v2 stopped', $e->getMessage());
+        }
+
+        $db = new PDO("sqlite:$this->dir/dup.sqlite");
+        $this->assertSame(1, self::scalar($db, 'PRAGMA user_version'), 'rolled back');
+        $this->assertSame(4, self::scalar($db, 'SELECT COUNT(*) FROM files'), 'no evidence row dropped');
+        $log = (string)file_get_contents("$this->dir/php-errors.log");
+        $this->assertStringContainsString('same name in directory id 1 (dump.bin): files ids 1,2', $log);
+        $this->assertStringContainsString('same SHA-256 in directory id 2 (cc): files ids 3,4', $log);
     }
 }

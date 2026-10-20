@@ -9,6 +9,8 @@ The application uses a single entrypoint: `index.php`. It handles routing manual
 Command-line tools live in `bin/` and refuse to run outside the CLI SAPI:
 - `php bin/create-admin.php <username>`: creates an administrator (or resets an existing user's password and adds them to the admin group) and prints a random password once. This is how the first administrator is created; no default account exists. It's also the break-glass tool when every administrator is locked out: it needs shell access only, and no identity provider.
 - `php bin/send-test-mail.php <recipient>`: sends a test e-mail through the configured mail engine, exactly as invitations are sent. Exit code 0 when the engine accepted the message, 1 with the reason on stderr otherwise. Run it as the web server user (e.g. `sudo -u www-data php bin/send-test-mail.php …`) to also check its permissions.
+- `php bin/check-integrity.php`: re-hashes every stored file and compares it with its `files` record (SHA-256 and size). Also reports `files` rows that share a name or a SHA-256 in one directory, and, with the local storage engine, files in storage without a record. Read-only; exit code 0 when everything matches, 1 otherwise.
+- `php bin/expire-uploads.php`: expires uploads without activity for `upload_stale_after` seconds and deletes their staging files. The application also does this whenever an upload starts; the script is for a cron job.
 
 Middleware (such as authentication or CSRF protection) must be applied explicitly per route.
 
@@ -37,7 +39,9 @@ project-root/
 ├── phpunit.xml.dist           # PHPUnit configuration
 ├── bin/                       # CLI tools (not web-accessible)
 │   ├── create-admin.php       # Create the first / an additional administrator
-│   └── send-test-mail.php     # Check the mail configuration
+│   ├── send-test-mail.php     # Check the mail configuration
+│   ├── check-integrity.php    # Re-hash stored files against the database
+│   └── expire-uploads.php     # Expire abandoned uploads (cron)
 ├── docker/                    # Container deployment
 │   ├── Dockerfile
 │   ├── docker-compose.yml
@@ -66,6 +70,8 @@ project-root/
 │   ├── Middleware/
 │   │   ├── AccessMiddleware.php
 │   │   └── SecurityMiddleware.php
+│   ├── Services/
+│   │   └── ChunkedUpload.php  # Upload state machine, verification, commit
 │   └── Views/                 # Templates for rendering HTML
 │       ├── Modals/            # Bootstrap modals
 │       │   ├── AccessRightsModal.php
@@ -84,6 +90,7 @@ project-root/
 │   ├── database/              # SQLite database files
 │   │   └── app.sqlite         # Main SQLite database
 │   ├── files/                 # Storage for uploaded files (local storage engine)
+│   │   └── .uploads/          # Staging: uploads in progress (reserved name)
 │   └── logs/                  # Log files (file log engine)
 ├── vendor/                    # Composer dependencies (auto-generated)
 ├── composer.json              # Composer configuration file
@@ -184,13 +191,14 @@ The logger is globally available via `App::getLogger()` and all controller-level
 
 - Login success/failure
 - Logout
-- Uploads / deletions
+- Uploads (`upload_start`, `upload_verifying`, `upload_completed` with size and SHA-256, `upload_name_conflict`, `upload_duplicate_refused`, `upload_denied`, `upload_chunk_rejected`, `upload_failed`, `upload_aborted`, `upload_expired`, `upload_verify_restarted`) and deletions
 - Password changes
 - Group/user permission changes (WIP)
 - Invitations (`user_invited`, with `invitation_sent`) and mail failures (`mail_send_failure`)
 
 **Forensic constraints:**
-- Every uploaded file is SHA256-hashed at write time
+- Every uploaded file is assembled in staging, then SHA-256-hashed by reading it back from storage, and only then moved to its final path and recorded with its real size. A partial or unverified file is never visible
+- A name that already exists in a folder is refused, never overwritten or appended to; the same content twice in one folder is refused too (unique indexes back both rules)
 - File metadata (upload timestamp, user, and origin IP) is persisted in the database
 - File deletion is logged
 - All access control decisions are enforced via middleware (see `AccessMiddleware`)
@@ -254,8 +262,9 @@ Access rights :
 
 Database initialization is handled programmatically in `src/Core/Database.php`.
 
-`createTables()` creates the current schema on a fresh database. Upgrades of existing databases are handled by `Database::migrate()`, versioned with SQLite's `PRAGMA user_version`. Each step must be idempotent, because fresh databases already have the current schema:
+`createSchema()` creates the current schema on a fresh database. Upgrades of existing databases are handled by `Database::migrate()`, versioned with SQLite's `PRAGMA user_version`. Each step must be idempotent, because fresh databases already have the current schema:
 - **v1:** adds `groups.is_admin` and flags group `id = 1`, the group the former hardcoded admin check trusted. It also locks the formerly seeded `admin` account if it still has the default password `admin`; the lock is reported in the PHP error log. Create a new administrator with `php bin/create-admin.php <username>`.
+- **v2:** replaces the v1 `uploads` table (in-progress v1 uploads are discarded; their partial files, left at their final path by the v1 code, are listed in the PHP error log) with `uploads` and `upload_chunks`, and adds the unique indexes `files(directory_id, name)` and `files(directory_id, sha256)`. The v1 upload code could create two rows for one name; the migration never drops such evidence records. If it finds any, it stops, lists them in the PHP error log, and the application refuses to run until an operator resolves them. `bin/check-integrity.php` lists them too, along with stored files that no longer match their hash.
 
 To add a migration, add a `if ($version < N)` block in `migrate()` that ends with `PRAGMA user_version = N`. Back up `storage/database/app.sqlite` before upgrading.
 
@@ -323,19 +332,36 @@ CREATE TABLE IF NOT EXISTS 'access_rights' (
     FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
     FOREIGN KEY (directory_id) REFERENCES directories(id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX files_dir_name ON files(directory_id, name);
+CREATE UNIQUE INDEX files_dir_sha256 ON files(directory_id, sha256);
 CREATE TABLE uploads (
-    uuid TEXT PRIMARY KEY,
-    file_name TEXT NOT NULL,
-    file_size INTEGER NOT NULL,
-    total_chunks INTEGER NOT NULL,
-    last_chunk_index INTEGER NOT NULL DEFAULT 0,
-    hash_state TEXT NOT NULL,
-    storage_path TEXT NOT NULL,
-    status TEXT CHECK (status IN ('pending', 'in_progress', 'completed', 'failed')) DEFAULT 'pending',
-    last_update DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    client_uuid TEXT NOT NULL,          -- Dropzone's dzuuid: unique per user only
+    directory_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    size INTEGER NOT NULL,              -- declared; checked against the staged file
+    chunk_size INTEGER NOT NULL,
+    chunk_count INTEGER NOT NULL,
+    staging_key TEXT NOT NULL UNIQUE,   -- server-generated
+    sha256 TEXT,                        -- from the staged file, at completion
+    verified_bytes INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('in_progress', 'verifying', 'completed', 'aborted', 'failed', 'expired')),
+    error TEXT,
+    file_id INTEGER,                    -- the files row, once completed
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_update DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, client_uuid),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (directory_id) REFERENCES directories(id) ON DELETE CASCADE
+);
+CREATE INDEX uploads_active ON uploads(status, last_update);
+CREATE TABLE upload_chunks (           -- chunks received; deleted when the upload ends
+    upload_id INTEGER NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    size INTEGER NOT NULL,
+    PRIMARY KEY (upload_id, chunk_index),
+    FOREIGN KEY (upload_id) REFERENCES uploads(id) ON DELETE CASCADE
 );
 ```
 
@@ -357,6 +383,8 @@ All engines send UTF-8 HTML with a plain-text alternative (`MailText::fromHtml()
 Storage engine can be :
 - Local for the local filesystem (`base_storage_directory` must be an existing directory)
 - Amazon S3 and Azure Blob storage: planned, not implemented. `storage_engine=amazon_s3|azure_blob` is refused with an explicit error.
+
+Besides reading, uploads need a **staging** area (`stagingCreate`, `stagingWriteAt`, `stagingSize`, `stagingOpen`, `stagingCommit`, `stagingRemove`), keyed by 32 hex digits generated by the application. `stagingWriteAt` writes a chunk at its offset, so a chunk written twice leaves the same content. `stagingCommit` moves the staged element to its final path and must never replace an existing element. The local engine stages in `.uploads/` under its root, on the same filesystem, so the commit is an atomic `rename()`; that name is reserved in the root folder (and folder names can't start with a dot).
 
 ### Logging
 

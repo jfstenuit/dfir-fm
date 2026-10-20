@@ -18,8 +18,7 @@ final class StorageEngineLocalTest extends TestCase
 
     protected function tearDown(): void
     {
-        array_map('unlink', glob("$this->dir/*"));
-        rmdir($this->dir);
+        exec('rm -rf ' . escapeshellarg($this->dir));
     }
 
     public static function invalidBaseDirectories(): array
@@ -65,5 +64,68 @@ final class StorageEngineLocalTest extends TestCase
         $engine = new StorageEngineLocal($this->dir);
         $this->expectException(\Exception::class);
         $engine->readAt($path, 0, 1);
+    }
+
+    public function testDotsInsideANameAreNotTraversal(): void
+    {
+        file_put_contents("$this->dir/report..final", 'x');
+        $this->assertSame('x', (new StorageEngineLocal($this->dir))->readAt('/report..final', 0, 1));
+    }
+
+    private const KEY = '0123456789abcdef0123456789abcdef';
+
+    private static function stream(string $bytes)
+    {
+        $stream = fopen('php://memory', 'w+b');
+        fwrite($stream, $bytes);
+        rewind($stream);
+        return $stream;
+    }
+
+    public function testStagingWritesAtOffsetsAndCommits(): void
+    {
+        $engine = new StorageEngineLocal($this->dir);
+        $this->assertTrue($engine->stagingCreate(self::KEY));
+        $this->assertFalse($engine->stagingCreate(self::KEY), 'keys are never reused');
+
+        $this->assertTrue($engine->stagingWriteAt(self::KEY, 4, self::stream('efgh'), 4));
+        $this->assertTrue($engine->stagingWriteAt(self::KEY, 0, self::stream('abcd'), 4));
+        $this->assertTrue($engine->stagingWriteAt(self::KEY, 4, self::stream('EFGH'), 4), 'rewrite');
+        $this->assertFalse($engine->stagingWriteAt(self::KEY, 8, self::stream('ij'), 4), 'short source');
+        $this->assertSame(10, $engine->stagingSize(self::KEY));
+
+        $stream = $engine->stagingOpen(self::KEY);
+        $this->assertSame('abcdEFGHij', stream_get_contents($stream));
+        fclose($stream);
+
+        $this->assertFileDoesNotExist("$this->dir/case/dump.bin");
+        $this->assertTrue($engine->stagingCommit(self::KEY, '/case/dump.bin'));
+        $this->assertSame('abcdEFGHij', file_get_contents("$this->dir/case/dump.bin"));
+        $this->assertNull($engine->stagingSize(self::KEY));
+    }
+
+    public function testStagingCommitNeverReplacesAFile(): void
+    {
+        $engine = new StorageEngineLocal($this->dir);
+        $engine->stagingCreate(self::KEY);
+        $this->assertFalse($engine->stagingCommit(self::KEY, '/file'));
+        $this->assertSame('', file_get_contents("$this->dir/file"));
+        $this->assertTrue($engine->stagingRemove(self::KEY));
+        $this->assertTrue($engine->stagingRemove(self::KEY), 'already gone');
+        $this->assertFalse($engine->stagingWriteAt(self::KEY, 0, self::stream('x'), 1), 'removed');
+    }
+
+    public function testStagingKeysAreValidated(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        (new StorageEngineLocal($this->dir))->stagingCreate('../../etc/x');
+    }
+
+    public function testHealthCheckLeavesTheRootAlone(): void
+    {
+        $engine = new StorageEngineLocal($this->dir);
+        $this->assertTrue($engine->healthCheck());
+        $this->assertSame(['.uploads', 'file'], array_values(array_diff(scandir($this->dir), ['.', '..'])));
+        $this->assertSame(['.', '..'], scandir("$this->dir/.uploads"));
     }
 }

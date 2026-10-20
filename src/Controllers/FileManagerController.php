@@ -167,11 +167,13 @@ class FileManagerController
             return;
         }
 
-        // Validate name: must be a valid directory name
+        // Validate name: must be a valid directory name. No leading dot:
+        // '.', '..', and the storage's staging directory '.uploads'
         if (
             !mb_check_encoding($folderName, 'UTF-8') ||
             preg_match('/[<>\/\\\\&]/u', $folderName) ||
-            preg_match('/[\x00-\x1F\x7F]/', $folderName)
+            preg_match('/[\x00-\x1F\x7F]/', $folderName) ||
+            str_starts_with($folderName, '.')
         ) {
             error_log("Invalid directory name: $folderName");
             echo json_encode(['success' => false, 'message' => 'Invalid directory name']);
@@ -190,6 +192,14 @@ class FileManagerController
         $stmt->execute([':cwd' => $cwd]);
         $parent = $stmt->fetch(PDO::FETCH_ASSOC);
         $parentDirectoryId = $parent ? (int)$parent['id'] : null;
+
+        // Files and folders share the storage namespace
+        $file = $db->prepare("SELECT 1 FROM files WHERE directory_id = :dir AND name = :name");
+        $file->execute([':dir' => $parentDirectoryId, ':name' => $folderName]);
+        if ($file->fetchColumn()) {
+            echo json_encode(['success' => false, 'message' => 'A file with this name already exists.']);
+            return;
+        }
 
         // Get Username
         $user = AccessMiddleware::getUserInfo($db, $userId);

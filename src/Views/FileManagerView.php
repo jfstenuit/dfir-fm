@@ -27,13 +27,13 @@ class FileManagerView
   <link rel="stylesheet" href="vendor/components/font-awesome/css/all.min.css">
   <!-- <link rel="stylesheet" href="vendor/datatables/datatables/media/css/jquery.dataTables.min.css"> -->
   <link rel="stylesheet" href="vendor/datatables/datatables/media/css/dataTables.bootstrap4.min.css">
-  <link rel="stylesheet" href="vendor/enyo/dropzone/dist/min/dropzone.min.css">
+  <link rel="stylesheet" href="vendor/enyo/dropzone/dist/dropzone.css">
   <link rel="stylesheet" href="assets/css/style.css">
   <script src="vendor/components/jquery/jquery.min.js"></script>
   <script src="vendor/components/bootstrap/js/bootstrap.min.js"></script>
   <script src="vendor/datatables/datatables/media/js/jquery.dataTables.min.js"></script>
   <script src="vendor/datatables/datatables/media/js/dataTables.bootstrap4.min.js"></script>
-  <script src="vendor/enyo/dropzone/dist/min/dropzone.min.js"></script>
+  <script src="vendor/enyo/dropzone/dist/dropzone-min.js"></script>
   <script src="vendor/corejavascript/typeahead.js/dist/typeahead.bundle.min.js"></script>
   <script type="module" src="assets/js/site.js"></script>
 </head>

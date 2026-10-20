@@ -88,78 +88,179 @@ function initDataTable() {
     }
 }
 
-function initDropzone() {    
+function initDropzone() {
     if (!document.getElementById('fileUploader')) return;
 
-    Dropzone.autoDiscover = false;
     $('#fileUploader').addClass('dropzone');
 
-    new Dropzone("#fileUploader", {
+    const dropzone = new Dropzone("#fileUploader", {
         url: "upload",
         method: "post",
+        // Every file goes through the chunked protocol, even a one-chunk or
+        // empty one: the server verifies and commits it in a separate step
         chunking: true,
         forceChunking: true,
         chunkSize: 2 * 1024 * 1024,
         parallelChunkUploads: false,
+        // Safe: the server writes each chunk at its own offset
         retryChunks: true,
         retryChunksLimit: 3,
         headers: { 'X-CSRF-TOKEN': getCsrfToken() },
+        addRemoveLinks: true,
+        dictRemoveFile: "Dismiss",
+        dictCancelUploadConfirmation: "Cancel this upload?",
 
+        // Refused before any byte is sent: rights, size, name already taken
         accept: function (file, done) {
-            const cwd = $('#cwd').val();
-            $.ajax({
-                url: "upload",
-                method: "POST",
-                data: { cwd: cwd, a: "checkRights" },
-                success: function (response) {
-                    if (response.hasPermission) {
-                        done();
-                    } else {
-                        done("You don't have permission to upload files in this directory.");
-                    }
-                },
-                error: function () {
-                    done("An error occurred while validating upload permissions.");
-                }
-            });
+            uploadRequest({ a: 'checkRights', cwd: $('#cwd').val(), name: file.name, size: file.size })
+                .then(() => done(), error => done(error.message));
+        },
+
+        // All chunks are in: the server hashes the stored file and commits it
+        chunksUploaded: function (file, done) {
+            completeUpload(file)
+                .then(state => {
+                    if (file.status === Dropzone.CANCELED) return;
+                    file.uploadResult = state.file;
+                    done();
+                })
+                .catch(error => {
+                    if (file.status === Dropzone.CANCELED) return;
+                    file.status = Dropzone.ERROR;
+                    dropzone.emit("error", file, error.message);
+                    dropzone.emit("complete", file);
+                    dropzone.processQueue();
+                });
         },
 
         init: function () {
-            this.on("success", function (file, response) {
-                // If server responded with an error despite HTTP 200/500
-                if (response.status && response.status !== 'success') {
-                    this.emit("error", file, response.message || "Unknown server error");
-                    return;
-                }
-                const newFile = response.file;
-
-                const encodedPath = encodeURIComponent($('#cwd').val() + '/' + newFile.name);
-                const table = $('#main-table').DataTable();
-                const $tr=$('<tr>');
-                $tr.append(`<td><a href="dl?p=${encodedPath}">${escapeHtml(newFile.name)}</a></td>`);
-                $tr.append(`<td data-order="${newFile.size}">${newFile.size}</td>`);
-                $tr.append(`<td data-order="${newFile.uploaded_at}">${escapeHtml(newFile.uploaded_at)}</td>`);
-                $tr.append(`<td>${escapeHtml(newFile.uploaded_by)}<br>${escapeHtml(newFile.uploaded_from)}</td>`);
-                $tr.append(`<td class="checksum" title="${newFile.sha256}">${newFile.sha256}</td>`);
-                $tr.append(`
-                    <td class="inline-actions"
-                        data-id="${newFile.id}"
-                        data-type="f"
-                        data-name="${escapeHtml(newFile.name)}">
-                        <a href="#" class="delete-action" data-toggle="modal" data-target="#deleteConfirmModal">
-                            <i class="fa fa-trash"></i>
-                        </a>
-                    </td>
-                `);
-                
-                table.row.add($tr).draw(false);
+            this.on("success", function (file) {
+                setUploadStage(file, 'Stored and verified');
+                addFileRow(file.uploadResult);
             });
 
-            this.on("error", function (file, errorMessage) {
-                console.error("Error uploading file:", errorMessage);
+            this.on("canceled", function (file) {
+                // Removes the server's staging copy; nothing to do if no chunk was sent
+                uploadRequest({ a: 'abort', dzuuid: file.upload.uuid }).catch(() => {});
+            });
+
+            // Server errors are JSON objects: show their message, not "[object Object]"
+            this.on("error", function (file, message) {
+                const text = typeof message === 'string' ? message : (message && message.message) || 'Upload failed.';
+                file.previewElement?.querySelectorAll('[data-dz-errormessage]').forEach(node => { node.textContent = text; });
+                // Dropzone shows the message on hover only: keep the reason visible
+                setUploadStage(file, text);
+                file.previewElement?.querySelector('.dz-stage')?.classList.add('text-danger');
+                console.warn("Upload refused or failed:", text);
             });
         }
     });
+}
+
+/**
+ * POST to the upload endpoint. Resolves with the JSON body of a 2xx answer,
+ * rejects with an Error carrying the server's message (and `status`, 0 for
+ * a network failure).
+ */
+async function uploadRequest(fields) {
+    let response;
+    try {
+        response = await fetch('upload', {
+            method: 'POST',
+            headers: { 'X-CSRF-TOKEN': getCsrfToken() },
+            body: new URLSearchParams(fields),
+        });
+    } catch (e) {
+        throw Object.assign(new Error('Network error.'), { status: 0 });
+    }
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        throw Object.assign(new Error(body.message || `Server error (HTTP ${response.status}).`), { status: response.status });
+    }
+    return body;
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Ask the server to verify and commit, and follow the verification with
+ * status polls. The complete request runs for as long as the hashing takes;
+ * if it is cut (proxy timeout, network), the verification goes on on the
+ * server and the polls pick up the outcome.
+ */
+async function completeUpload(file) {
+    const uuid = file.upload.uuid;
+    let settled = false;
+    setUploadStage(file, 'Verifying stored file…');
+
+    // Resolves with the final state, or null when the outcome must come from the polls
+    // (202: verifying elsewhere; 5xx or network: the request was cut)
+    const completion = uploadRequest({ a: 'complete', dzuuid: uuid })
+        .then(state => state.status === 'completed' ? state : null,
+              error => { if (error.status >= 400 && error.status < 500) throw error; return null; });
+    completion.then(state => { settled = state !== null; }, () => { settled = true; });
+
+    const polling = (async () => {
+        let failures = 0;
+        for (;;) {
+            await sleep(1000);
+            if (settled || file.status === Dropzone.CANCELED) return null;
+            try {
+                const state = await uploadRequest({ a: 'status', dzuuid: uuid });
+                failures = 0;
+                if (state.status === 'completed') return state;
+                if (state.status !== 'verifying') throw Object.assign(new Error(state.message || `Upload ${state.status}.`), { status: 409 });
+                const percent = state.size ? Math.floor(100 * state.verified_bytes / state.size) : 100;
+                setUploadStage(file, `Verifying stored file… ${percent}%`);
+            } catch (error) {
+                if (error.status >= 400 && error.status < 500) throw error;
+                if (++failures >= 30) throw new Error('Lost contact with the server during verification.');
+            }
+        }
+    })();
+    polling.catch(() => {}); // awaited below, only if needed
+
+    const state = (await completion) ?? (await polling);
+    if (!state) throw new Error('Upload canceled.');
+    return state;
+}
+
+/** A line of text under the file's preview: the upload stage */
+function setUploadStage(file, text) {
+    const preview = file.previewElement;
+    if (!preview) return;
+    let stage = preview.querySelector('.dz-stage');
+    if (!stage) {
+        stage = document.createElement('div');
+        stage.className = 'dz-stage';
+        preview.appendChild(stage);
+    }
+    stage.textContent = text;
+}
+
+function addFileRow(newFile) {
+    if (!newFile) return;
+    const cwd = $('#cwd').val();
+    const encodedPath = encodeURIComponent(cwd + '/' + newFile.name);
+    const table = $('#main-table').DataTable();
+    const $tr = $('<tr>');
+    $tr.append(`<td><a href="dl?p=${encodedPath}">${escapeHtml(newFile.name)}</a></td>`);
+    $tr.append(`<td data-order="${newFile.size}">${newFile.size}</td>`);
+    $tr.append(`<td data-order="${escapeHtml(newFile.uploaded_at)}">${escapeHtml(newFile.uploaded_at)}</td>`);
+    $tr.append(`<td>${escapeHtml(newFile.uploaded_by)}<br>${escapeHtml(newFile.uploaded_from)}</td>`);
+    $tr.append(`<td class="checksum" title="${newFile.sha256}">${newFile.sha256}</td>`);
+    $tr.append(`
+        <td class="inline-actions"
+            data-id="${newFile.id}"
+            data-type="f"
+            data-name="${escapeHtml(newFile.name)}">
+            <a href="#" class="delete-action" data-toggle="modal" data-target="#deleteConfirmModal">
+                <i class="fa fa-trash"></i>
+            </a>
+        </td>
+    `);
+
+    table.row.add($tr).draw(false);
 }
 
 

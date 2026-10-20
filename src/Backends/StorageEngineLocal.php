@@ -4,6 +4,12 @@ namespace Backends;
 
 class StorageEngineLocal implements StorageEngineInterface
 {
+    /**
+     * Staging directory, under the storage root. The name is reserved in
+     * the root directory (see Services\ChunkedUpload::validateName).
+     */
+    public const STAGING_DIRECTORY = '.uploads';
+
     private $baseDirectory;
 
     public function __construct($baseDirectory) {
@@ -63,8 +69,8 @@ class StorageEngineLocal implements StorageEngineInterface
             throw new \Exception("Path contains control or null characters.");
         }
 
-        // 4. Reject obvious traversal and ambiguity
-        if (preg_match('/\.\.|\/{2,}|\\\\/', $path)) {
+        // 4. Reject traversal ('..' segments; "report..pdf" is a valid name) and ambiguity
+        if (preg_match('#(^|/)\.\.(/|$)|/{2,}|\\\\#', $path)) {
             throw new \Exception("Suspicious path detected : ".$path);
         }
 
@@ -97,23 +103,6 @@ class StorageEngineLocal implements StorageEngineInterface
     }
 
     /**
-     * Create a storage element (file).
-     *
-     * @param string $path The path to create the storage element.
-     * @return bool True on success, false on failure.
-     */
-    public function createElement(string $path): bool
-    {
-        $directory = $this->validatePath(dirname($path));
-        if (!is_dir($directory)) {
-            if (!mkdir($directory, 0755, true) && !is_dir($directory)) {
-                return false;
-            }
-        }
-        return touch($this->baseDirectory . DIRECTORY_SEPARATOR . ltrim($path, DIRECTORY_SEPARATOR));
-    }
-
-    /**
      * Read data from a storage element at a specific position.
      *
      * @param string $path The path to the storage element.
@@ -140,28 +129,6 @@ class StorageEngineLocal implements StorageEngineInterface
 
         // Not `$data ?: null`: the string "0" is falsy in PHP
         return $data === false ? null : $data;
-    }
-
-    /**
-     * Write or append data to a storage element.
-     *
-     * @param string $path The path to the storage element.
-     * @param string $data The data to write or append.
-     * @return bool True on success, false on failure.
-     */
-    public function writeAppend(string $path, string $data): bool
-    {
-        $absolutePath = $this->validatePath($path);
-
-        $file = fopen($absolutePath, 'ab'); // Open for append (binary-safe)
-        if (!$file) {
-            return false;
-        }
-
-        $written = fwrite($file, $data);
-        fclose($file);
-
-        return $written !== false;
     }
 
     /**
@@ -226,6 +193,106 @@ class StorageEngineLocal implements StorageEngineInterface
         return true;
     }
 
+    public function readStream(string $path)
+    {
+        $absolutePath = $this->validatePath($path);
+        if (!is_file($absolutePath)) {
+            return null;
+        }
+        return fopen($absolutePath, 'rb') ?: null;
+    }
+
+    /** The staging directory, created on first use; null if it can't be */
+    private function stagingDirectory(): ?string
+    {
+        $directory = $this->baseDirectory . DIRECTORY_SEPARATOR . self::STAGING_DIRECTORY;
+        if (!is_dir($directory) && !@mkdir($directory, 0700) && !is_dir($directory)) {
+            error_log("Failed to create the staging directory: $directory");
+            return null;
+        }
+        return $directory;
+    }
+
+    private function stagingPath(string $key): string
+    {
+        if (!preg_match('/^[0-9a-f]{32}$/', $key)) {
+            throw new \InvalidArgumentException('Invalid staging key');
+        }
+        $directory = $this->stagingDirectory();
+        if ($directory === null) {
+            throw new \RuntimeException('Staging directory unavailable');
+        }
+        return $directory . DIRECTORY_SEPARATOR . $key;
+    }
+
+    public function stagingCreate(string $key): bool
+    {
+        $path = $this->stagingPath($key);
+        $handle = @fopen($path, 'xb'); // fails if it exists: keys are never reused
+        if (!$handle) {
+            return false;
+        }
+        fclose($handle);
+        return true;
+    }
+
+    public function stagingWriteAt(string $key, int $offset, $source, int $length): bool
+    {
+        $path = $this->stagingPath($key);
+        if ($offset < 0 || $length < 0 || !is_file($path)) {
+            return false;
+        }
+
+        // 'c': open for writing without truncating, so chunks can arrive in
+        // any order and a chunk sent again overwrites its own range
+        $target = fopen($path, 'cb');
+        if (!$target) {
+            return false;
+        }
+        $copied = fseek($target, $offset) === 0 ? stream_copy_to_stream($source, $target, $length) : false;
+        $flushed = fflush($target);
+        fclose($target);
+
+        return $copied === $length && $flushed;
+    }
+
+    public function stagingSize(string $key): ?int
+    {
+        $path = $this->stagingPath($key);
+        clearstatcache(true, $path);
+        return is_file($path) ? filesize($path) : null;
+    }
+
+    public function stagingOpen(string $key)
+    {
+        $path = $this->stagingPath($key);
+        return is_file($path) ? (fopen($path, 'rb') ?: null) : null;
+    }
+
+    public function stagingCommit(string $key, string $path): bool
+    {
+        $source = $this->stagingPath($key);
+        $target = $this->validatePath($path);
+        if (!is_file($source) || file_exists($target) || is_link($target)) {
+            return false;
+        }
+
+        $directory = dirname($target);
+        if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
+            return false;
+        }
+
+        // Same filesystem as the staging directory: rename() is atomic, so
+        // the file appears complete or not at all
+        return rename($source, $target);
+    }
+
+    public function stagingRemove(string $key): bool
+    {
+        $path = $this->stagingPath($key);
+        return !file_exists($path) || unlink($path);
+    }
+
     /**
      * Perform a health check to ensure the storage engine is functional.
      *
@@ -238,8 +305,14 @@ class StorageEngineLocal implements StorageEngineInterface
             return false;
         }
 
-        // Create a temporary test file to confirm write/read permissions
-        $testFile = $this->baseDirectory . DIRECTORY_SEPARATOR . '.storage_engine_test';
+        // Create a temporary test file to confirm write/read permissions.
+        // In the staging directory: at the root, it could clobber a user's
+        // file with the same name.
+        $stagingDirectory = $this->stagingDirectory();
+        if ($stagingDirectory === null) {
+            return false;
+        }
+        $testFile = $stagingDirectory . DIRECTORY_SEPARATOR . '.health-' . bin2hex(random_bytes(4));
         $success = file_put_contents($testFile, 'test') !== false;
 
         if ($success) {
