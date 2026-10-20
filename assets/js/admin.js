@@ -1,25 +1,30 @@
-let AdminUsers, AdminGroups, AdminLogs;
+// assets/js/admin.js - Admin page: tabs (users, groups, logs), password change
+//
+// Each tab's data is (re)loaded whenever the tab is shown, and once for the
+// tab active on arrival.
+
+import { updatePassword } from './utils.js';
+
+const loaders = {};   // tab pane id => load()
 
 export async function init() {
-    AdminUsers = await import('./admin-users.js');
-    AdminGroups = await import('./admin-groups.js');
-    // AdminLogs = await import('./admin-logs.js'); (when ready)
+    const [users, groups] = await Promise.all([import('./admin-users.js'), import('./admin-groups.js')]);
+    loaders.usersTab = users.load;
+    loaders.groupsTab = groups.load;
+    // logsTab: not implemented yet
 
-    bindTabSwitch();
-    loadInitialTab();
-}
+    const links = document.querySelectorAll('[data-bs-toggle="tab"]');
+    links.forEach(link => link.addEventListener('shown.bs.tab', event => loadTab(event.target)));
+    const active = [...links].find(link => link.classList.contains('active'));
+    if (active) loadTab(active);
 
-function bindTabSwitch() {
-    $('a[data-bs-toggle="tab"]').on('shown.bs.tab', function (e) {
-        const target = $(e.target).attr('data-bs-target');
-        if (target === '#usersTab') AdminUsers.load();
-        else if (target === '#groupsTab') AdminGroups.load();
-        // else if (target === '#logsTab') AdminLogs.load();
+    document.getElementById('profileForm')?.addEventListener('submit', event => {
+        event.preventDefault();
+        updatePassword();
     });
 }
 
-function loadInitialTab() {
-    if (document.getElementById('usersTab')?.classList.contains('active')) AdminUsers.load();
-    else if (document.getElementById('groupsTab')?.classList.contains('active')) AdminGroups.load();
-    // else if (document.getElementById('logsTab')?.classList.contains('active')) AdminLogs.load();
+function loadTab(link) {
+    const pane = (link.dataset.bsTarget ?? '').replace(/^#/, '');
+    loaders[pane]?.();
 }

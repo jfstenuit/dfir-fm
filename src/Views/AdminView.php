@@ -4,6 +4,7 @@ namespace Views;
 
 use Views\Modals\DeleteConfirmationModal;
 use Views\Modals\OperationResultModal;
+use Views\Modals\ProfileModal;
 use Views\Modals\UserGroupModal;
 
 class AdminView
@@ -157,6 +158,7 @@ class AdminView
 OperationResultModal::render();
 DeleteConfirmationModal::render();
 UserGroupModal::render();
+ProfileModal::render('');
 ?>
 </body>
 </html>
