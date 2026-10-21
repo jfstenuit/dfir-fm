@@ -91,12 +91,13 @@ final class SessionSecurityTest extends FeatureTestCase
         $this->assertTrue($client->post('login', $credentials, ['headers' => ['X-CSRF-TOKEN' => $token]])->json()['success']);
     }
 
-    public function testInvitationLinkLoginStillWorks(): void
+    /** The invitation link only shows the password form (InvitationLinkTest) */
+    public function testInvitationLinkShowsTheForm(): void
     {
-        $this->server->db()->exec("UPDATE users SET invitation_token = 'invtok123', token_expiry = datetime('now', '+1 hour') WHERE username = 'bob@test.local'");
+        $this->server->db()->exec("UPDATE users SET invitation_token = 'invtok123', token_expiry = '2999-01-01 00:00:00' WHERE username = 'bob@test.local'");
         $response = $this->client()->get('login', ['query' => ['email' => TestServer::BOB, 'token' => 'invtok123', 'directory' => '/']]);
-        $this->assertSame(302, $response->status);
-        $this->assertSame('/?p=%2F', $response->header('Location'));
+        $this->assertSame(200, $response->status);
+        $this->assertStringContainsString('setPasswordForm', $response->body);
     }
 
     /** The test server runs at the web root, where redirects used to become '//' (protocol-relative) */

@@ -18,7 +18,7 @@ class ProfileModal {
                 <input type="text" name="username" id="username" value="<!-- current username -->" autocomplete="username" readonly hidden>
                   <div class="mb-3">
                       <label for="newPassword">New Password</label>
-                      <input type="password" class="form-control" id="newPassword" name="newPassword" placeholder="Enter new password" autocomplete="new-password" required>
+                      <input type="password" class="form-control" id="newPassword" name="newPassword" placeholder="At least 12 characters" autocomplete="new-password" minlength="12" required>
                   </div>
               </form>
           </div>

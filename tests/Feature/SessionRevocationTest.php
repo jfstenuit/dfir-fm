@@ -65,13 +65,16 @@ final class SessionRevocationTest extends FeatureTestCase
         $this->assertTrue($this->client()->login(TestServer::BOB, 'a-new-password-1')->json()['success']);
     }
 
-    /** Invitees have no password ('!') until they set one: that is not a lock */
-    public function testTokenSessionIsNotTakenForALockedAccount(): void
+    /** An invitee logged in through the invitation form keeps the session it opened */
+    public function testInvitationSessionIsNotRevoked(): void
     {
         $this->server->db()->exec("UPDATE users SET password = '!', invitation_token = 'abc', token_expiry = '2999-01-01 00:00:00'
                                    WHERE username = 'bob@test.local'");
         $invitee = $this->client();
-        $this->assertSame(302, $invitee->get('login?email=' . urlencode(TestServer::BOB) . '&token=abc&directory=/')->status);
+        $link = 'login?email=' . urlencode(TestServer::BOB) . '&token=abc&directory=/';
+        $answer = $invitee->postWithCsrf('login', ['action' => 'setPassword', 'email' => TestServer::BOB, 'token' => 'abc',
+                                                   'directory' => '/', 'password' => 'a-new-password-1'], $link);
+        $this->assertTrue($answer->json()['success']);
 
         $this->assertSame(200, $invitee->get('')->status);
         $this->assertSame([], $this->server->logEntries('session_revoked'));

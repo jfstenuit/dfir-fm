@@ -2,6 +2,8 @@
 // src/Controllers/ProfileController.php
 namespace Controllers;
 
+use Core\App;
+use Core\PasswordPolicy;
 use Core\Session;
 use Core\Request;
 use Core\Response;
@@ -39,13 +41,14 @@ class ProfileController
 
     private static function updatePassword(PDO $db, $userId, array $request)
     {
-        if (empty($request['password'])) {
-            echo json_encode(['success' => false, 'message' => 'Password cannot be empty.']);
+        // No previous password asked (D24): the session is proof enough, and an
+        // invitee who set theirs through an invitation link may not remember it
+        $problem = PasswordPolicy::problem($request['password'] ?? null);
+        if ($problem !== null) {
+            echo json_encode(['success' => false, 'message' => $problem]);
             return;
         }
 
-        // Potentially, we could check about password complexity requirements here
-    
         $newPasswordHash = password_hash($request['password'], PASSWORD_DEFAULT);
 
         // Ends the account's other sessions; this one is kept
@@ -59,6 +62,7 @@ class ProfileController
             $stmt = $db->prepare("SELECT session_version FROM users WHERE id = :id");
             $stmt->execute([':id' => $userId]);
             Session::setVersion((int)$stmt->fetchColumn());
+            App::getLogger()->log('password_changed', ['via' => 'profile']);
 
             echo json_encode(['success' => true, 'message' => 'Password updated.']);
         } else {

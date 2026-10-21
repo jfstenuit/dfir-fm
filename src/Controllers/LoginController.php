@@ -4,11 +4,13 @@ namespace Controllers;
 
 use Core\Config;
 use Core\Database;
+use Core\PasswordPolicy;
 use Core\Request;
 use Core\Session;
 use Core\App;
 use Middleware\SecurityMiddleware;
 use Views\LoginView;
+use Views\SetPasswordView;
 
 use PDO;
 
@@ -17,13 +19,10 @@ class LoginController
     public static function handle($config, $db)
     {
         if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-            // Case A : login with a token
-            $email = trim($_GET['email'] ?? '');
-            $token = trim($_GET['token'] ?? '');
-            $directory = trim($_GET['directory'] ?? '');
-
-            if (!empty($email) && !empty($token) && !empty($directory)) {
-                self::processTokenLogin($db, $email, $token, $directory);
+            // Case A : invitation link. Only shows the password form: mail
+            // scanners that follow links neither log in nor use up the token.
+            if (isset($_GET['email']) || isset($_GET['token'])) {
+                self::showInvitation($db);
                 return;
             }
 
@@ -35,6 +34,8 @@ class LoginController
             $action = $_POST['action'] ?? null;
             if ($action === 'checkUser') {
                 self::handleUserCheck($db);
+            } elseif ($action === 'setPassword') {
+                self::processSetPassword($db);
             } else {
                 self::processLogin($db);
             }
@@ -44,60 +45,115 @@ class LoginController
         }
     }
 
-    private static function processTokenLogin($db, $email, $token, $directory)
+    private const INVALID_LINK = 'This invitation link is not valid: it was already used, has expired (links are valid for one hour), or was replaced by a newer one. Ask the person who invited you for a new invitation.';
+
+    /** A query parameter or form field as a string ('' when missing or an array) */
+    private static function field(array $source, string $name): string
     {
-        // Validate the token for the provided email
-        $stmt = $db->prepare("
-            SELECT u.id AS user_id, u.username, u.invitation_token, u.token_expiry, u.session_version
-            FROM users u
-            WHERE u.username = :email AND u.deleted_at IS NULL
-        ");
-        $stmt->bindParam(':email', $email, PDO::PARAM_STR);
-        $stmt->execute();
+        return is_string($source[$name] ?? null) ? $source[$name] : '';
+    }
+
+    /**
+     * The account an invitation token belongs to, or the cause of refusal:
+     * 'unknown' (no active account), 'used' (no pending token: used, or none
+     * issued), 'wrong' (another token), 'expired'. The cause is logged only:
+     * the invitee always gets the same message.
+     * @return array{0: ?array, 1: ?string}
+     */
+    private static function checkInvitation(PDO $db, string $email, string $token): array
+    {
+        $stmt = $db->prepare("SELECT id AS user_id, username, invitation_token, token_expiry, session_version
+                              FROM users WHERE username = :email AND deleted_at IS NULL");
+        $stmt->execute([':email' => $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$user) {
-            App::getLogger()->log('login_token_failure', ['cause'=>'Invalid token']);
+            return [null, 'unknown'];
+        }
+        if ($user['invitation_token'] === null || $user['invitation_token'] === '') {
+            return [null, 'used'];
+        }
+        if (!hash_equals($user['invitation_token'], $token)) {
+            return [null, 'wrong'];
+        }
+        if ($user['token_expiry'] === null || strtotime($user['token_expiry']) < time()) {
+            return [null, 'expired'];
+        }
+        return [$user, null];
+    }
+
+    /** Headers of the invitation page and answers: the URL holds the token */
+    private static function invitationHeaders(): void
+    {
+        header('Referrer-Policy: no-referrer');
+        header('Cache-Control: no-store');
+    }
+
+    private static function showInvitation(PDO $db): void
+    {
+        self::invitationHeaders();
+        $email = trim(self::field($_GET, 'email'));
+        $token = trim(self::field($_GET, 'token'));
+        $directory = trim(self::field($_GET, 'directory')) ?: '/';
+
+        [$user, $cause] = self::checkInvitation($db, $email, $token);
+        if ($user === null) {
+            App::getLogger()->log('login_token_failure', ['cause' => $cause, 'target_user' => $email, 'step' => 'link']);
             http_response_code(400);
-            echo "Invalid or expired token.";
+            SetPasswordView::render($email, '', $directory, self::INVALID_LINK);
+            return;
+        }
+        SetPasswordView::render($email, $token, $directory);
+    }
+
+    /**
+     * The invitation form: checks the token again, sets the password and
+     * uses up the token in one statement (a second POST with the same token
+     * fails), ends the account's other sessions, then logs in.
+     */
+    private static function processSetPassword(PDO $db): void
+    {
+        self::invitationHeaders();
+        header('Content-Type: application/json');
+        $email = trim(self::field($_POST, 'email'));
+        $token = trim(self::field($_POST, 'token'));
+        $directory = trim(self::field($_POST, 'directory')) ?: '/';
+        $password = $_POST['password'] ?? null;   // never trimmed
+
+        [$user, $cause] = self::checkInvitation($db, $email, $token);
+        if ($user === null) {
+            App::getLogger()->log('login_token_failure', ['cause' => $cause, 'target_user' => $email, 'step' => 'password']);
+            echo json_encode(['success' => false, 'message' => self::INVALID_LINK]);
             return;
         }
 
-        // Check token validity and expiry
-        if ($user['invitation_token'] !== $token || strtotime($user['token_expiry']) < time()) {
-            App::getLogger()->log('login_token_failure', ['cause'=>'Expired token']);
-            http_response_code(400);
-            echo "Invalid or expired token.";
+        $problem = PasswordPolicy::problem($password);
+        if ($problem !== null) {
+            echo json_encode(['success' => false, 'message' => $problem]);
             return;
         }
 
-        App::getLogger()->log('login_token_success', [
-            'username' => $email
-        ]);
-
-        // Check if the directory exists
-        $stmt = $db->prepare("
-            SELECT id
-            FROM directories
-            WHERE path = :directory_path
-        ");
-        $stmt->bindParam(':directory_path', $directory, PDO::PARAM_STR);
-        $stmt->execute();
-        $directoryInfo = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$directoryInfo) {
-            http_response_code(404);
-            echo "Directory not found.";
+        $stmt = $db->prepare("UPDATE users SET password = :password, invitation_token = NULL, token_expiry = NULL,
+                                               session_version = session_version + 1
+                              WHERE id = :id AND invitation_token = :token AND deleted_at IS NULL");
+        $stmt->execute([':password' => password_hash($password, PASSWORD_DEFAULT), ':id' => $user['user_id'], ':token' => $user['invitation_token']]);
+        if ($stmt->rowCount() !== 1) {
+            // Another request used the token between the check and the update
+            App::getLogger()->log('login_token_failure', ['cause' => 'used', 'target_user' => $email, 'step' => 'password']);
+            echo json_encode(['success' => false, 'message' => self::INVALID_LINK]);
             return;
         }
+        $user['session_version'] = (int)$user['session_version'] + 1;
 
-        // Authenticate the user
         Session::authenticate($user);
+        App::getLogger()->log('password_changed', ['via' => 'invitation']);
+        App::getLogger()->log('login_token_success', []);
 
-        // Redirect to the directory
-        $redirectPath = Request::getBasePath() . '/?p=' . urlencode($directory);
-        header("Location: " . $redirectPath);
-        exit;
+        // The invitation folder if it still exists, else the root
+        $stmt = $db->prepare("SELECT 1 FROM directories WHERE path = :path");
+        $stmt->execute([':path' => $directory]);
+        $target = $stmt->fetchColumn() ? $directory : '/';
+        echo json_encode(['success' => true, 'redirect' => Request::getBasePath() . '/?p=' . urlencode($target)]);
     }
 
     private static function handleUserCheck($db)
@@ -154,10 +210,11 @@ class LoginController
         header('Content-Type: application/json');
     
         $username = trim($_POST['username'] ?? '');
-        $password = trim($_POST['password'] ?? '');
+        // Never trimmed (PasswordPolicy): a space is a character like any other
+        $password = is_string($_POST['password'] ?? null) ? $_POST['password'] : '';
         $redirect = isset($_POST['redirect']) ? filter_var($_POST['redirect'], FILTER_SANITIZE_URL) : null;
     
-        if (empty($username) || empty($password)) {
+        if ($username === '' || $password === '') {
             App::getLogger()->log('login_password_failure', ['cause'=>'Empty username or password']);
             echo json_encode(['success' => false, 'message' => 'Username and password are required.']);
             return;

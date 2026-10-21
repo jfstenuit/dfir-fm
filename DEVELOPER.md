@@ -22,7 +22,7 @@ Routes (`index.php`). Authentication and CSRF checks are global, in `index.php`:
 | `/upload` | `UploadController` | Chunked upload (see "Upload protocol") |
 | `/admin` | `AdminController` | Admin page and its actions (users, groups, invitations, access rights); admins only |
 | `/profile` | `ProfileController` | `updatePassword` |
-| `/login` | `LoginController` | Two-step password login, invitation token login |
+| `/login` | `LoginController` | Two-step password login; the invitation link's password form (`setPassword`) |
 | `/logout` | `LogoutController` | |
 
 ## Directory structure
@@ -43,7 +43,8 @@ project-root/
 │       ├── admin.js           # Admin page entry: tabs, password change
 │       ├── admin-users.js     # Admin: user management
 │       ├── admin-groups.js    # Admin: group management
-│       └── login.js           # Login page
+│       ├── login.js           # Login page
+│       └── set-password.js    # Invitation link page: set a password
 ├── tests/                     # PHPUnit tests (see "Testing")
 │   ├── Unit/                  # Pure logic, no server
 │   ├── Feature/               # HTTP-level, isolated app instance per test
@@ -82,6 +83,7 @@ project-root/
 │   │   ├── App.php            # Singleton pattern to store $db, $config and $logger
 │   │   ├── Config.php
 │   │   ├── Database.php
+│   │   ├── PasswordPolicy.php # The password rule (12 characters, never trimmed)
 │   │   ├── Request.php
 │   │   ├── Response.php
 │   │   └── Session.php
@@ -105,7 +107,8 @@ project-root/
 │       ├── FileManagerView.php
 │       ├── InvitationView.php
 │       ├── Layout.php         # <head> shared by the pages (asset lists)
-│       └── LoginView.php
+│       ├── LoginView.php
+│       └── SetPasswordView.php # Invitation link page
 ├── storage/                   # Created at runtime, not in git; must not be web-accessible
 │   ├── database/              # SQLite database files
 │   │   └── app.sqlite         # Main SQLite database (default; database_path)
@@ -137,7 +140,7 @@ To debug:
 ## Front end
 
 - **Libraries**, from Composer, served from `vendor/` as built: Bootstrap 5.3 (`twbs/bootstrap`, the bundle with Popper, exposes `window.bootstrap`), Bootstrap Icons (`twbs/bootstrap-icons`, `bi bi-*` classes) and Dropzone 6 (`enyo/dropzone`, imported by `filemanager.js` as `dist/dropzone.mjs`). No jQuery.
-- **Pages:** `Views/Layout.php` prints every page's `<head>`; `Layout::appHead()` is the asset list of the file manager and admin pages, whose entry module is `site.js`. The login page loads `login.js` only.
+- **Pages:** `Views/Layout.php` prints every page's `<head>`; `Layout::appHead()` is the asset list of the file manager and admin pages, whose entry module is `site.js`. The login page loads `login.js` only, the invitation link page `set-password.js` only.
 - **Modules** are plain ES modules (`type="module"`), loaded without a bundler. They run once the document is parsed.
 - **Requests** go through `api(url, {data | json | body})` in `utils.js`: it sends the CSRF token, parses JSON and throws an `ApiError` (`status`, `code`, server `message`) on a network failure, an HTTP error, a non-JSON body or `{success: false}`. A redirect to the login page or a CSRF 403 (`code: csrf_invalid`) means the session is gone: the page reloads.
 - **DOM:** build elements with `h(tag, attributes, ...children)` (text children are text nodes, never parsed as HTML) and `icon(name)`; no HTML strings with data in them. Table actions use event delegation (`on(root, type, selector, handler)`), bound once.
@@ -207,6 +210,12 @@ The application now implements several layers of security to defend against comm
 - **Downloads**  
   `GET /dl` checks the read right on the file's folder for every request. `Response::contentDisposition()` builds the `Content-Disposition` header: an ASCII fallback `filename` with quotes, backslashes, `%`, `;` and control characters replaced, plus the exact name in `filename*=UTF-8''…` (RFC 6266). A single `Range` (`bytes=a-b`, `a-`, `-n`) gets a `206`, an unsatisfiable one a `416`; multiple ranges get the whole file. Logged as `download_success`, `download_partial` or `download_failure`.
 
+- **Invitation links**  
+  The link (`login?email=…&token=…&directory=…`) only shows a form asking for a new password, twice: opening it neither logs in nor uses up the token, so mail scanners that follow links do no harm. The form's POST (`action=setPassword`, CSRF-protected) checks the token again (`hash_equals()`, not expired), applies the password rule, then sets the password, clears the token and increments `session_version` in one `UPDATE … WHERE invitation_token = :token`: the token works once, even with two concurrent POSTs, and the account's older sessions end. The invitee is then logged in and sent to the invitation folder (`/` if it no longer exists). The page and the answer carry `Referrer-Policy: no-referrer` and `Cache-Control: no-store`, so the token doesn't leak into `Referer` headers or caches. Tokens are 128 random bits, valid one hour (D23). An unusable link always gets the same page; the log says why (`login_token_failure` with `cause`: `unknown` account, `used` (no pending token), `wrong` token, `expired`). The Docker image's lighttpd access log leaves the query string out; with Apache, use a `LogFormat` with `%U` rather than `%r` (or `%q`) for the same effect.
+
+- **Passwords**  
+  One rule (`Core\PasswordPolicy`, D26) for the invitation form and the profile dialog: at least 12 characters, no complexity rule (accounts mostly live for the duration of an investigation). Passwords are never trimmed, neither when set nor at login. Setting a password never asks for the current one (D24): the session, or the invitation token, is the proof.
+
 - **Session Hijack Protection**  
 Session cookies are `HttpOnly`, `SameSite=Lax`, scoped to the application's base path, and `Secure` when the request is HTTPS (directly, `X-Forwarded-Proto` from a trusted proxy, or `force_https=true`). `Lax` rather than `Strict`: `Strict` drops the cookie on navigations coming from another site, which breaks invitation links opened from an e-mail and the planned OIDC callback. Cross-site POSTs remain blocked by `Lax` and the CSRF tokens. `session.use_strict_mode` rejects session IDs the server didn't issue, and the session ID is regenerated at login (session fixation). Sessions end after 1 hour without a request (hardcoded in `Session::isStillValid()`) and on logout. Revocation is immediate: on every request, `index.php` reads the session's account (`Session::revocationCause()`) and ends the session when the account no longer exists, is deleted, or its `session_version` differs from the one stored at login. Locking or deleting an account, a reset by `bin/create-admin.php` and a password change increment it; the session that changed its own password is kept. A revoked session is answered like an expired one (a redirect to `login`) and logged as `session_revoked`. PHP's own `session.gc_maxlifetime` (1440 s by default) can delete an idle session earlier; a configurable timeout is part of #16.
 
@@ -223,15 +232,13 @@ Log engines are configured via `.env` using the `log_engine` key.
 
 The logger is globally available via `App::getLogger()` and all controller-level events are expected to log security-sensitive actions. Every record carries `ts` (UTC), `action` (the event), `username`, the client `ip` (and `peer_ip`, see *Client IP resolution*), plus the event's own fields. Events logged today:
 
-- Login and logout: `login_password_success`, `login_password_failure`, `login_token_success`, `login_token_failure`, `logout`, `session_revoked` (with `cause`: `deleted`, `missing`, or `revoked` for a lock or a password change)
+- Login and logout: `login_password_success`, `login_password_failure`, `login_token_success` (after the invitation form, once logged in), `login_token_failure` (with `cause`: `unknown`, `used`, `wrong`, `expired`, and `step`: `link` or `password`), `password_changed` (with `via`: `invitation` or `profile`), `logout`, `session_revoked` (with `cause`: `deleted`, `missing`, or `revoked` for a lock or a password change)
 - Uploads: `upload_start`, `upload_verifying`, `upload_completed` (with size and SHA-256), `upload_name_conflict`, `upload_duplicate_refused`, `upload_denied`, `upload_chunk_rejected`, `upload_failed`, `upload_aborted`, `upload_expired`, `upload_verify_restarted`
 - Downloads: `download_success`, `download_partial`, `download_failure`
 - Folders and files: `directory_created`, `directory_deleted`, `file_deleted`, `filemanager_failure` (a missing folder requested)
 - Administration: `user_invited` (with `invitation_sent`), `user_locked`, `user_deleted` (with `target_user_id` and `pseudonym`), `group_created`, `group_deleted` (with the number of `members` it had), `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
 - Mail failures: `mail_send_failure`
 - Command line: `cli_admin_created` (`bin/create-admin.php`, also when it resets a password), `cli_test_mail_sent` and `cli_deleted_user_lookup` (with `address_hash` and the account ids found), with `username` set to `cli:` + the system user; `upload_expired` from `bin/expire-uploads.php`, without a username
-
-Not logged yet: password changes from the profile dialog.
 
 **Forensic constraints:**
 - Every uploaded file is assembled in staging, then SHA-256-hashed by reading it back from storage, and only then moved to its final path and recorded with its real size. A partial or unverified file is never visible
@@ -258,7 +265,7 @@ Access rights :
 |--------|-------------|-------------|
 | 🧑 View Users | List all users, their groups and their status (active: a password or a valid invitation; otherwise locked) | Admin UI, Users tab |
 | ➕ Create User | Not available: a contributor is created by inviting them. Administrators are created with `bin/create-admin.php` | — |
-| ✉️ Invite User | Creates the user, adds them to the group `<their e-mail domain> users`, gives that group the chosen rights on the current folder and optionally e-mails a tokenized login link | File Manager UI (admins), Invite dialog |
+| ✉️ Invite User | Creates the user, adds them to the group `<their e-mail domain> users`, gives that group the chosen rights on the current folder and optionally e-mails a link to a page where they set their password (valid one hour, single use) | File Manager UI (admins), Invite dialog |
 | 🔁 Resend Invitation | A new invitation link | Admin UI, Users tab |
 | 👥 Group memberships | Add or remove a user's groups | Admin UI, Users tab |
 | 🔒 Lock User | Makes the password and any pending invitation unusable | Admin UI, Users tab |
@@ -282,7 +289,7 @@ The pseudonym is pseudonymous, not anonymous: anyone who has the address can com
 ### 2. **User Self-Service**
 | Feature | Description | Location |
 |--------|-------------|-------------|
-| 🔑 Change Password | New password, typed once; the current one isn't asked for | Profile dialog (File Manager and Admin UI) |
+| 🔑 Change Password | New password (at least 12 characters), typed once; the current one isn't asked for (D24). Other sessions of the account end | Profile dialog (File Manager and Admin UI) |
 
 ---
 
