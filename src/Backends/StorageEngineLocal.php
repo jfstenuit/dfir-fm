@@ -103,35 +103,6 @@ class StorageEngineLocal implements StorageEngineInterface
     }
 
     /**
-     * Read data from a storage element at a specific position.
-     *
-     * @param string $path The path to the storage element.
-     * @param int $offset The byte offset to start reading from.
-     * @param int $length The number of bytes to read.
-     * @return string|null The read data, or null on failure.
-     */
-    public function readAt(string $path, int $offset, int $length): ?string
-    {
-        $absolutePath = $this->validatePath($path);
-
-        if (!is_file($absolutePath) || !is_readable($absolutePath)) {
-            return null;
-        }
-
-        $file = fopen($absolutePath, 'rb');
-        if (!$file) {
-            return null;
-        }
-
-        fseek($file, $offset);
-        $data = fread($file, $length);
-        fclose($file);
-
-        // Not `$data ?: null`: the string "0" is falsy in PHP
-        return $data === false ? null : $data;
-    }
-
-    /**
      * Check if a storage element exists.
      *
      * @param string $path The path to the storage element.

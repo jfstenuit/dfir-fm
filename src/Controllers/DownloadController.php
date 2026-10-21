@@ -13,6 +13,9 @@ use PDO;
 
 class DownloadController
 {
+    /** Bytes read and sent at a time */
+    private const BLOCK_SIZE = 64 << 10;
+
     public static function handle($config,$db)
     {
         $userId = $_SESSION['user_id'];
@@ -57,15 +60,19 @@ class DownloadController
             return;
         }
 
-        if (!$storageEngine->exists($requestedFile)) {
+        // One handle for the whole response: the worker this request holds
+        // does nothing but copy bytes
+        $stream = $storageEngine->readStream($requestedFile);
+        $filesize = $storageEngine->getSize($requestedFile);
+        if ($stream === null || $filesize === null) {
+            if ($stream !== null) {
+                fclose($stream);
+            }
             error_log("Failed to get a file from back-end storage");
             Response::triggerSystemError();
-            exit;
+            return;
         }
 
-
-        // Fetch the file metadata
-        $filesize = $storageEngine->getSize($requestedFile);
         $filename = $pathParts['basename'];
         
         // Set headers for file download
@@ -85,10 +92,19 @@ class DownloadController
             App::getLogger()->log('download_failure', ['cause'=>'Range not satisfiable', 'file'=>$filename, 'range'=>$_SERVER['HTTP_RANGE']]);
             http_response_code(416);
             header('Content-Range: bytes */' . $filesize);
+            fclose($stream);
             return;
         }
         if ($range !== null) {
             [$start, $end] = $range;
+            if (fseek($stream, $start) !== 0) {
+                fclose($stream);
+                error_log("Failed to seek in a file from back-end storage");
+                header_remove('Content-Disposition');
+                header('Content-Type: text/html; charset=UTF-8');
+                Response::triggerSystemError();
+                return;
+            }
             App::getLogger()->log('download_partial', ['file'=>$filename, 'directory'=>$pathParts['dirname'], 'range'=>$_SERVER['HTTP_RANGE']]);
 
             // Inform the client about the partial content
@@ -102,31 +118,24 @@ class DownloadController
         $contentLength = ($end - $start) + 1;
         header('Content-Length: ' . $contentLength);
 
-        // Serve the file in chunks
-        $chunkSize = 8192; // 8 KB per chunk
-        $currentOffset = $start;
-
-        while ($currentOffset <= $end) {
-            // Calculate the number of bytes to read for the current chunk
-            $bytesToRead = min($chunkSize, $end - $currentOffset + 1);
-        
-            // Read data from the storage engine
-            $chunkData = $storageEngine->readAt($requestedFile, $currentOffset, $bytesToRead);
-        
-            // Check for read failure
-            if ($chunkData === null) {
-                Response::triggerSystemError();
-                exit;
+        // A disk image takes longer to send than max_execution_time allows.
+        // A client that goes away still ends the script (ignore_user_abort
+        // stays off), which frees the worker.
+        set_time_limit(0);
+        $remaining = $filesize === 0 ? 0 : $contentLength;
+        while ($remaining > 0) {
+            $chunkData = fread($stream, min(self::BLOCK_SIZE, $remaining));
+            // Not `if (!$chunkData)`: the string "0" is falsy in PHP
+            if ($chunkData === false || $chunkData === '') {
+                // Headers are sent: the client sees a short body
+                App::getLogger()->log('download_failure', ['cause' => 'Read error', 'file' => $filename, 'missing_bytes' => $remaining]);
+                break;
             }
-        
-            // Output the data to the client
             echo $chunkData;
-            flush(); // Ensure immediate output to the client
-        
-            // Move to the next chunk
-            $currentOffset += $bytesToRead;
+            flush();
+            $remaining -= strlen($chunkData);
         }
-
+        fclose($stream);
     }
 
     /**

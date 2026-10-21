@@ -160,7 +160,25 @@ class LoginController
     {
         header('Content-Type: application/json');
         $email = trim($_POST['email'] ?? '');
-    
+
+        // Per client IP, like the password step but twice as many: each
+        // login attempt makes one check. A blocked source gets its answer
+        // at once, without the delay below holding a worker.
+        $limits = SecurityMiddleware::loginThrottleSettings(App::getConfig());
+        $ipKey = 'login_checks_ip_' . hash('sha256', (string)Request::getClientIp());
+        if (!SecurityMiddleware::throttle($ipKey, 2 * $limits['per_ip'], $limits['window'])) {
+            App::getLogger()->log('login_password_failure', [
+                'cause' => 'Brute force attempt',
+                'limit' => 'ip',
+                'step' => 'user',
+                'target_user' => $email,
+            ]);
+            http_response_code(429);
+            header('Retry-After: ' . $limits['window']);
+            echo json_encode(['success' => false, 'message' => 'Too many login attempts. Try again later.']);
+            return;
+        }
+
         // Always respond the same way to avoid user enumeration
         usleep(random_int(100000, 300000)); // Sleep 100–300ms
     

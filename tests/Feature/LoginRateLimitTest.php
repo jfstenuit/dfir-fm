@@ -131,4 +131,26 @@ final class LoginRateLimitTest extends FeatureTestCase
         }
         $this->assertBlocked($this->tryLogin('ignored', 'z@x'));
     }
+
+    /** The email step: per IP, twice max_login_attempts, a counter of its own */
+    public function testUserCheckLimitedPerIp(): void
+    {
+        $this->withSettings(['trusted_proxies' => '127.0.0.1', 'max_login_attempts' => '3']);
+        $check = fn(string $xff) => $this->from($xff)->postWithCsrf('login', ['action' => 'checkUser', 'email' => 'bob@test.local'], 'login');
+
+        for ($i = 1; $i <= 6; $i++) {
+            $response = $check('192.0.2.1');
+            $this->assertSame([200, 'password'], [$response->status, $response->json()['login_type'] ?? null], "check $i");
+        }
+        $blocked = $check('192.0.2.1');
+        $this->assertSame(429, $blocked->status);
+        $this->assertSame('300', $blocked->header('Retry-After'));
+        $this->assertStringContainsString('Too many login attempts', $blocked->json()['message']);
+
+        $this->assertSame(200, $check('192.0.2.2')->status, 'another client is not affected');
+        $this->assertNotBlocked($this->tryLogin('192.0.2.1', TestServer::BOB, TestServer::BOB_PASSWORD));
+
+        $logged = $this->server->logEntries('login_password_failure');
+        $this->assertSame([['ip', 'user', '192.0.2.1']], array_map(fn($e) => [$e['limit'], $e['step'], $e['ip']], $logged));
+    }
 }

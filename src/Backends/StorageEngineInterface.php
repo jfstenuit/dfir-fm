@@ -5,16 +5,6 @@ namespace Backends;
 interface StorageEngineInterface
 {
     /**
-     * Read data from a storage element at a specific position.
-     *
-     * @param string $path The path or key of the storage element.
-     * @param int $offset The byte offset to start reading from.
-     * @param int $length The number of bytes to read.
-     * @return string|null The read data, or null on failure.
-     */
-    public function readAt(string $path, int $offset, int $length): ?string;
-
-    /**
      * Check if a storage element exists.
      *
      * @param string $path The path or key of the storage element.

@@ -52,10 +52,41 @@ final class DownloadTest extends FeatureTestCase
 
     public function testFileWhoseLastChunkIsTheCharacterZero(): void
     {
-        $this->server->addFile('tail0.bin', str_repeat(' ', 8192) . '0');
+        // A last block of "0" (falsy in PHP) used to be taken for a read failure
+        $this->server->addFile('tail0.bin', str_repeat(' ', 65536) . '0');
         $response = $this->download('tail0.bin');
         $this->assertSame(200, $response->status);
-        $this->assertSame(8193, strlen($response->body));
+        $this->assertSame(65537, strlen($response->body));
+        $this->assertSame('0', substr($response->body, -1));
+    }
+
+    /** Several 64 KiB blocks read through one handle: whole file, and ranges across block boundaries */
+    public function testLargeFileWholeAndRanges(): void
+    {
+        $bytes = random_bytes(300_000);
+        $this->server->addFile('large.bin', $bytes);
+
+        $whole = $this->download('large.bin');
+        $this->assertSame([200, '300000'], [$whole->status, $whole->header('Content-Length')]);
+        $this->assertSame(hash('sha256', $bytes), hash('sha256', $whole->body));
+
+        foreach ([[65530, 65545], [1, 299_998], [131_072, 131_072], [200_000, 299_999]] as [$start, $end]) {
+            $response = $this->download('large.bin', "bytes=$start-$end");
+            $this->assertSame(206, $response->status, "$start-$end");
+            $this->assertSame((string)($end - $start + 1), $response->header('Content-Length'), "$start-$end");
+            $this->assertSame("bytes $start-$end/300000", $response->header('Content-Range'));
+            $this->assertSame(substr($bytes, $start, $end - $start + 1), $response->body, "$start-$end");
+        }
+        $this->assertSame(substr($bytes, -70_000), $this->download('large.bin', 'bytes=-70000')->body);
+    }
+
+    public function testFileMissingFromStorage(): void
+    {
+        $this->server->addFile('gone.bin', 'x');
+        unlink($this->server->root . '/storage/files/gone.bin');
+        $response = $this->download('gone.bin');
+        $this->assertSame(500, $response->status);
+        $this->assertNull($response->header('Content-Disposition'));
     }
 
     public function testEmptyFile(): void

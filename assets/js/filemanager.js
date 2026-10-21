@@ -362,6 +362,10 @@ async function completeUpload(file) {
                 failures = 0;
                 if (state.status === 'completed') return state;
                 if (state.status !== 'verifying') throw Object.assign(new Error(state.message || `Upload ${state.status}.`), { status: 409 });
+                if (state.queued) {
+                    setUploadStage(file, 'Waiting for your other uploads to be verified…');
+                    continue;
+                }
                 const percent = state.size ? Math.floor(100 * state.verified_bytes / state.size) : 100;
                 setUploadStage(file, `Verifying stored file… ${percent}%`);
             } catch (error) {

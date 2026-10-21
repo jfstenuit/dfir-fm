@@ -520,6 +520,89 @@ final class ChunkedUploadTest extends TestCase
         $this->assertCount(1, $this->logged('upload_verify_restarted'));
     }
 
+    // ------------------------------------------------- verification cap
+
+    private const UUID3 = '16fd2706-8baf-433b-82eb-8c7fada847da';
+
+    /** Alice's first upload, all chunks in and verifying in another request */
+    private function verifyingElsewhere(ChunkedUpload $service): void
+    {
+        $this->send('first', name: 'first.bin', uuid: self::UUID3, service: $service);
+        $this->db->exec("UPDATE uploads SET status = 'verifying' WHERE name = 'first.bin'");
+    }
+
+    private function statusOf(string $name): string
+    {
+        $stmt = $this->db->prepare("SELECT status FROM uploads WHERE name = :name");
+        $stmt->execute([':name' => $name]);
+        return (string)$stmt->fetchColumn();
+    }
+
+    public function testVerificationsOverTheCapWaitForTheStatusPoll(): void
+    {
+        $service = $this->service();
+        $this->verifyingElsewhere($service);
+        $this->send('abcdefgh', service: $service);
+
+        $state = $service->complete(self::ALICE, self::UUID);
+        $this->assertSame(['verifying', true, 0], [$state['status'], $state['queued'] ?? null, $state['verified_bytes']]);
+        $this->assertSame('in_progress', $this->statusOf('dump.bin'), 'not started');
+        $this->assertCount(0, array_filter($this->logged('upload_verifying'), fn($c) => $c['file'] === 'dump.bin'));
+        $this->assertTrue($service->status(self::ALICE, self::UUID)['queued'] ?? false, 'still waiting');
+
+        // The other verification ends: the next poll runs this one
+        $this->db->exec("UPDATE uploads SET status = 'completed' WHERE name = 'first.bin'");
+        $state = $service->status(self::ALICE, self::UUID);
+        $this->assertSame('completed', $state['status']);
+        $this->assertArrayNotHasKey('queued', $state);
+        $this->assertSame(hash('sha256', 'abcdefgh'), $state['file']['sha256']);
+    }
+
+    public function testCapIsPerUserAndIgnoresStalledVerifications(): void
+    {
+        $service = $this->service();
+        $this->verifyingElsewhere($service);
+
+        // Bob isn't limited by Alice's verification
+        $this->send('bobdata', name: 'bob.bin', user: self::BOB, uuid: self::UUID2, service: $service);
+        $this->assertSame('completed', $service->complete(self::BOB, self::UUID2)['status']);
+
+        // A verification whose request died doesn't hold Alice's slot
+        $this->db->exec("UPDATE uploads SET last_update = datetime('now', '-10 minutes') WHERE name = 'first.bin'");
+        $this->send('abcdefgh', service: $service);
+        $this->assertSame('completed', $service->complete(self::ALICE, self::UUID)['status']);
+    }
+
+    public function testStalledVerificationWaitsForAFreeSlot(): void
+    {
+        $service = $this->service();
+        $this->send('abcdefgh', service: $service);
+        $this->db->exec("UPDATE uploads SET status = 'verifying', verified_bytes = 4, last_update = datetime('now', '-10 minutes')");
+        $this->verifyingElsewhere($service);
+
+        $state = $service->status(self::ALICE, self::UUID);
+        $this->assertSame(['verifying', true, 0], [$state['status'], $state['queued'] ?? null, $state['verified_bytes']]);
+        $this->assertSame('in_progress', $this->statusOf('dump.bin'), 'back in the queue');
+        $this->assertCount(0, $this->logged('upload_verify_restarted'));
+    }
+
+    public function testVerificationCapSetting(): void
+    {
+        $service = $this->service(['upload_max_verifications' => '2']);
+        $this->verifyingElsewhere($service);
+        $this->send('abcdefgh', service: $service);
+        $this->assertSame('completed', $service->complete(self::ALICE, self::UUID)['status']);
+
+        foreach (['0', '-1', 'two', '1.5'] as $invalid) {
+            try {
+                $this->service(['upload_max_verifications' => $invalid]);
+                $this->fail("accepted '$invalid'");
+            } catch (\InvalidArgumentException $e) {
+                $this->assertStringContainsString('upload_max_verifications', $e->getMessage());
+            }
+        }
+    }
+
     public function testAbortDuringVerificationWins(): void
     {
         $service = $this->service();

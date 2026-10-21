@@ -24,6 +24,12 @@ use PDO;
  * States: in_progress -> verifying -> completed, or aborted / failed /
  * expired. Terminal rows are kept for the audit trail; their chunk rows
  * are deleted.
+ *
+ * Each verification holds a PHP worker for as long as hashing takes, so a
+ * user runs at most upload_max_verifications at once (default 1). A
+ * complete() over that cap leaves the upload in_progress, reported as
+ * verifying with queued: true; the client's status polls start it once a
+ * slot is free.
  */
 final class ChunkedUpload
 {
@@ -43,11 +49,16 @@ final class ChunkedUpload
     /** Free space never handed to uploads: room for the database, logs and the system */
     public const FREE_SPACE_MARGIN = 64 << 20;
 
+    /** Verifications a user may run at once, unless upload_max_verifications says otherwise */
+    public const DEFAULT_MAX_VERIFICATIONS = 1;
+
     private int $staleAfter;
     private ?int $maxSize;
+    private int $maxVerifications;
 
     /**
-     * @param array<string,string> $config upload_stale_after (seconds), upload_max_size (bytes, K/M/G/T suffixes)
+     * @param array<string,string> $config upload_stale_after (seconds), upload_max_size (bytes, K/M/G/T suffixes),
+     *        upload_max_verifications (per user)
      * @throws \InvalidArgumentException on an invalid setting
      */
     public function __construct(
@@ -59,6 +70,11 @@ final class ChunkedUpload
     ) {
         $this->staleAfter = self::parseSize($config['upload_stale_after'] ?? '', 'upload_stale_after') ?? self::DEFAULT_STALE_AFTER;
         $this->maxSize = self::parseSize($config['upload_max_size'] ?? '', 'upload_max_size');
+        $verifications = trim((string)($config['upload_max_verifications'] ?? ''));
+        if ($verifications !== '' && (!preg_match('/^\d{1,4}$/', $verifications) || (int)$verifications === 0)) {
+            throw new \InvalidArgumentException('Invalid upload_max_verifications: expected a positive number');
+        }
+        $this->maxVerifications = $verifications === '' ? self::DEFAULT_MAX_VERIFICATIONS : (int)$verifications;
     }
 
     /** "", "1024", "10M", "2G": null for empty */
@@ -149,9 +165,7 @@ final class ChunkedUpload
                 ->execute([':id' => $upload['id'], ':index' => $index, ':size' => $length]);
             $this->touch((int)$upload['id']);
 
-            $received = $this->db->prepare("SELECT COUNT(*) FROM upload_chunks WHERE upload_id = :id");
-            $received->execute([':id' => $upload['id']]);
-            return ['received' => (int)$received->fetchColumn(), 'chunk_count' => (int)$upload['chunk_count']];
+            return ['received' => $this->chunksReceived((int)$upload['id']), 'chunk_count' => (int)$upload['chunk_count']];
         });
     }
 
@@ -169,7 +183,7 @@ final class ChunkedUpload
     {
         $uuid = self::uuid($uuid);
         try {
-            [$upload, $claimed] = $this->claimForVerification($userId, $uuid);
+            [$upload, $claimed, $queued] = $this->claimForVerification($userId, $uuid);
             if ($claimed) {
                 $this->verifyAndCommit($userId, $upload);
             }
@@ -181,6 +195,9 @@ final class ChunkedUpload
         }
 
         $state = $this->describe($this->find($userId, $uuid));
+        if ($queued && $state['status'] === 'in_progress') {
+            $state = ['status' => 'verifying', 'queued' => true] + $state;
+        }
         if (in_array($state['status'], ['aborted', 'failed', 'expired'], true)) {
             throw new UploadException(409, 'InvalidState', self::stateMessage($state), details: ['upload' => $state]);
         }
@@ -188,8 +205,9 @@ final class ChunkedUpload
     }
 
     /**
-     * Move the upload to 'verifying'
-     * @return array{array, bool} the upload, and whether this request now verifies it
+     * Move the upload to 'verifying', if the user's verification cap allows
+     * @return array{array, bool, bool} the upload, whether this request now
+     *         verifies it, and whether it waits for a free slot instead
      */
     private function claimForVerification(int $userId, string $uuid): array
     {
@@ -199,21 +217,41 @@ final class ChunkedUpload
             if ($upload['status'] === 'verifying') {
                 // Another request is verifying it, unless that one died
                 if (!$this->stalled($upload)) {
-                    return [$upload, false];
+                    return [$upload, false, false];
+                }
+                if ($this->verificationsRunning($userId, (int)$upload['id']) >= $this->maxVerifications) {
+                    // Back in the queue: restarted when a slot is free
+                    $this->db->prepare("UPDATE uploads SET status = 'in_progress', verified_bytes = 0, last_update = CURRENT_TIMESTAMP WHERE id = :id")
+                        ->execute([':id' => $upload['id']]);
+                    return [$upload, false, true];
                 }
                 $this->logger->log('upload_verify_restarted', self::logContext($upload));
             } elseif ($upload['status'] !== 'in_progress') {
-                return [$upload, false];
+                return [$upload, false, false];
             } else {
                 $this->checkAllChunksReceived($upload);
+                if ($this->verificationsRunning($userId, (int)$upload['id']) >= $this->maxVerifications) {
+                    // Waiting is activity: the polls keep it from expiring
+                    $this->touch((int)$upload['id']);
+                    return [$upload, false, true];
+                }
             }
 
             $this->writableDirectory($userId, (string)$upload['directory_id']);
             $this->db->prepare("UPDATE uploads SET status = 'verifying', verified_bytes = 0, last_update = CURRENT_TIMESTAMP WHERE id = :id")
                 ->execute([':id' => $upload['id']]);
             $this->logger->log('upload_verifying', self::logContext($upload));
-            return [$upload, true];
+            return [$upload, true, false];
         });
+    }
+
+    /** The user's verifications in progress, other than $exceptId; a stalled one (its request died) doesn't count */
+    private function verificationsRunning(int $userId, int $exceptId): int
+    {
+        $stmt = $this->db->prepare("SELECT COUNT(*) FROM uploads WHERE user_id = :user AND id != :id AND status = 'verifying'
+                                    AND last_update >= datetime('now', :age)");
+        $stmt->execute([':user' => $userId, ':id' => $exceptId, ':age' => '-' . self::VERIFY_STALLED_AFTER . ' seconds']);
+        return (int)$stmt->fetchColumn();
     }
 
     /**
@@ -226,6 +264,10 @@ final class ChunkedUpload
         $uuid = self::uuid($uuid);
         $upload = $this->find($userId, $uuid) ?? throw self::notFound();
         if ($upload['status'] === 'verifying' && $this->stalled($upload)) {
+            return $this->complete($userId, $uuid);
+        }
+        // Every chunk in: complete() was asked and the upload waits for a free slot
+        if ($upload['status'] === 'in_progress' && $this->chunksReceived((int)$upload['id']) === (int)$upload['chunk_count']) {
             return $this->complete($userId, $uuid);
         }
         return $this->describe($upload);
@@ -594,6 +636,13 @@ final class ChunkedUpload
         $stmt = $this->db->prepare("SELECT :last < datetime('now', :age)");
         $stmt->execute([':last' => $upload['last_update'], ':age' => '-' . self::VERIFY_STALLED_AFTER . ' seconds']);
         return (bool)$stmt->fetchColumn();
+    }
+
+    private function chunksReceived(int $id): int
+    {
+        $stmt = $this->db->prepare("SELECT COUNT(*) FROM upload_chunks WHERE upload_id = :id");
+        $stmt->execute([':id' => $id]);
+        return (int)$stmt->fetchColumn();
     }
 
     private function touch(int $id): void

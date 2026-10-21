@@ -50,15 +50,6 @@ final class StorageEngineLocalTest extends TestCase
         $this->assertEqualsWithDelta(disk_free_space($this->dir), (new StorageEngineLocal($this->dir))->freeSpace(), 64 << 20);
     }
 
-    public function testReadAtReturnsTheStringZero(): void
-    {
-        // `$data ?: null` used to turn the chunk "0" into a read failure
-        file_put_contents("$this->dir/zero", 'abc0');
-        $engine = new StorageEngineLocal($this->dir);
-        $this->assertSame('0', $engine->readAt('/zero', 3, 1));
-        $this->assertSame('abc0', $engine->readAt('/zero', 0, 8192));
-    }
-
     public static function traversalPaths(): array
     {
         return [['/../etc/passwd'], ['/a/../../etc'], ['/%2e%2e/x'], ["/a\0b"], ['//x'], ['/a\\b']];
@@ -69,13 +60,13 @@ final class StorageEngineLocalTest extends TestCase
     {
         $engine = new StorageEngineLocal($this->dir);
         $this->expectException(\Exception::class);
-        $engine->readAt($path, 0, 1);
+        $engine->readStream($path);
     }
 
     public function testDotsInsideANameAreNotTraversal(): void
     {
         file_put_contents("$this->dir/report..final", 'x');
-        $this->assertSame('x', (new StorageEngineLocal($this->dir))->readAt('/report..final', 0, 1));
+        $this->assertSame('x', stream_get_contents((new StorageEngineLocal($this->dir))->readStream('/report..final')));
     }
 
     private const KEY = '0123456789abcdef0123456789abcdef';

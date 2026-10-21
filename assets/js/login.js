@@ -54,7 +54,9 @@ stepLogin.addEventListener('submit', async event => {
         await slide(stepLogin, stepPassword, 'forward');
         password.focus();
     } catch (error) {
-        if (error.code !== 'csrf_invalid') {
+        if (error.status === 429) {
+            say(error.message);
+        } else if (error.code !== 'csrf_invalid') {
             say('Server error. Please try again.');
         }
     } finally {
