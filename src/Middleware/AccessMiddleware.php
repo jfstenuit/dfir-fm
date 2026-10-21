@@ -95,76 +95,83 @@ class AccessMiddleware
         return $token;
     }
 
-    public static function getContributorGroupId($db, $directoryPath, $accessRights) {
-        // Step 1: Get directory ID
-        $stmt = $db->prepare("SELECT d.id
-                              FROM directories d
-                              WHERE d.path = :directory_path");
-        $stmt->bindParam(':directory_path', $directoryPath, PDO::PARAM_STR);
-        $stmt->execute();
-        $directoryInfo = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$directoryInfo) return false;  // Directory does not exist
-        $directoryId = $directoryInfo['id'];
+    /** Suffix of a folder's default group name: "<folder path> contributors" (D20) */
+    public const DEFAULT_GROUP_SUFFIX = ' contributors';
 
-        // Step 2: Check if a contributor group exists for the directory with matching access rights
-        $queryConditions = [];
-        if (in_array('read', $accessRights)) {
-            $queryConditions[] = 'ar.can_view = TRUE';
+    /**
+     * The default group of a folder, created when missing (D15, D20, D21).
+     *
+     * Its name is "<folder path> contributors", or "… contributors (n)"; it
+     * is the default group only while it has an access_rights row on that
+     * folder. A group of that name with rights elsewhere (left by a rename or
+     * by a deleted folder of the same path) is never reused: its members
+     * would gain the folder. A new group gets contributor access only
+     * (can_upload) and the next free name. The rights of an existing group
+     * are never changed.
+     *
+     * Returns null for '/' (no invitation into the root, D14) or an unknown
+     * folder; else ['id', 'name', 'created'].
+     */
+    public static function defaultGroupFor(PDO $db, string $directoryPath): ?array
+    {
+        if ($directoryPath === '/') {
+            return null;
         }
-        if (in_array('write', $accessRights)) {
-            $queryConditions[] = 'ar.can_write = TRUE';
+        // BEGIN IMMEDIATE: two invitations at once can't both create a group
+        $own = !$db->inTransaction();
+        if ($own) {
+            $db->exec('BEGIN IMMEDIATE');
         }
-        if (in_array('upload', $accessRights)) {
-            $queryConditions[] = 'ar.can_upload = TRUE';
+        try {
+            $group = self::findOrCreateDefaultGroup($db, $directoryPath);
+            if ($own) {
+                $db->exec('COMMIT');
+            }
+            return $group;
+        } catch (\Throwable $e) {
+            if ($own) {
+                $db->exec('ROLLBACK');
+            }
+            throw $e;
+        }
+    }
+
+    private static function findOrCreateDefaultGroup(PDO $db, string $directoryPath): ?array
+    {
+        $stmt = $db->prepare("SELECT id FROM directories WHERE path = :path");
+        $stmt->execute([':path' => $directoryPath]);
+        $directoryId = $stmt->fetchColumn();
+        if ($directoryId === false) {
+            return null;
         }
 
-        $queryConditionString = implode(' AND ', $queryConditions);
-        $stmt = $db->prepare("SELECT g.id AS group_id
-                              FROM groups g
-                              JOIN access_rights ar ON g.id = ar.group_id
-                              WHERE ar.directory_id = :directory_id
-                                AND ($queryConditionString)");
-        $stmt->bindParam(':directory_path', $directoryId, PDO::PARAM_INT);
-        $stmt->execute();
-        $groupInfo = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if ($groupInfo) {
-            // Contributor group already exists, return its ID
-            return $groupInfo['group_id'];
+        // Names are compared in PHP: the path may hold LIKE wildcards (_ and %)
+        $base = $directoryPath . self::DEFAULT_GROUP_SUFFIX;
+        $stmt = $db->prepare("SELECT g.id, g.name FROM groups g JOIN access_rights ar ON ar.group_id = g.id
+                              WHERE ar.directory_id = :dir ORDER BY g.id");
+        $stmt->execute([':dir' => $directoryId]);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $group) {
+            if ($group['name'] === $base || preg_match('/^' . preg_quote($base, '/') . ' \(\d+\)$/', $group['name'])) {
+                return ['id' => (int)$group['id'], 'name' => $group['name'], 'created' => false];
+            }
         }
 
-        // Step 3: Create a new contributor group
-        $rightsAbbreviation = '';
-        $rightsAbbreviation .= in_array('read', $accessRights) ? 'R' : '';
-        $rightsAbbreviation .= in_array('write', $accessRights) ? 'W' : '';
-        $rightsAbbreviation .= in_array('upload', $accessRights) ? 'U' : '';
+        $taken = $db->prepare("SELECT 1 FROM groups WHERE name = :name");
+        for ($n = 1, $name = $base; ; $name = $base . ' (' . ++$n . ')') {
+            $taken->execute([':name' => $name]);
+            if ($taken->fetchColumn() === false) {
+                break;
+            }
+        }
 
-        $groupName = "$rightsAbbreviation Contributors for $directoryPath";
-        $groupDescription = "$rightsAbbreviation Contributor group for $directoryPath with selected rights";
-
-        $stmt = $db->prepare("INSERT INTO groups (name, description)
-                              VALUES (:name, :description)");
-        $stmt->bindParam(':name', $groupName, PDO::PARAM_STR);
-        $stmt->bindParam(':description', $groupDescription, PDO::PARAM_STR);
-        $stmt->execute();
-        $groupId = $db->lastInsertId();
-
-        // Step 4: Link the group to the directory with specified permissions
-        $canView = in_array('read', $accessRights) ? 1 : 0;
-        $canWrite = in_array('write', $accessRights) ? 1 : 0;
-        $canUpload = in_array('upload', $accessRights) ? 1 : 0;
-
+        $stmt = $db->prepare("INSERT INTO groups (name, description) VALUES (:name, :description)");
+        $stmt->execute([':name' => $name, ':description' => "Default group of $directoryPath (contributors)"]);
+        $groupId = (int)$db->lastInsertId();
         $stmt = $db->prepare("INSERT INTO access_rights (group_id, directory_id, can_view, can_write, can_upload)
-                              VALUES (:group_id, :directory_id, :can_view, :can_write, :can_upload)");
-        $stmt->bindParam(':group_id', $groupId, PDO::PARAM_INT);
-        $stmt->bindParam(':directory_id', $directoryId, PDO::PARAM_INT);
-        $stmt->bindParam(':can_view', $canView, PDO::PARAM_INT);
-        $stmt->bindParam(':can_write', $canWrite, PDO::PARAM_INT);
-        $stmt->bindParam(':can_upload', $canUpload, PDO::PARAM_INT);
-        $stmt->execute();
+                              VALUES (:group, :dir, 0, 0, 1)");
+        $stmt->execute([':group' => $groupId, ':dir' => $directoryId]);
 
-        // Return the newly created group's ID
-        return $groupId;
+        return ['id' => $groupId, 'name' => $name, 'created' => true];
     }
 
     public static function addUserToGroup($db, $userId, $groupId) {
