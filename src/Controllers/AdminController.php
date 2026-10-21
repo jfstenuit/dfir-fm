@@ -121,7 +121,10 @@ class AdminController
             'delivery' => $delivery['delivery'],
             'invitation_sent' => $delivery['error'] === null,
         ]);
-        self::answerDelivery($delivery, 'Invitation sent', 'Contributor added, but the invitation e-mail could not be sent. See the application log.');
+        $done = $group !== null ? "The account was created or found and added to the group \"{$group['name']}\"" : 'The account was created or found, without any group';
+        self::answerDelivery($delivery, 'Invitation sent',
+            "$done, but the invitation e-mail could not be sent (details in the application log, mail_send_failure). "
+            . 'Check the mail configuration with bin/send-test-mail.php, then use "Resend invitation" in the admin page.');
     }
 
     /**
@@ -147,8 +150,10 @@ class AdminController
         $error = null;
         try {
             $mailEngine = MailEngineFactory::create($config);
-            $body = InvitationView::render($email, $token, $directory, $baseUrl);
-            if (!$mailEngine->send($email, 'You have been invited to contribute on ' . $baseUrl, $body)) {
+            // As generateTokenForUser() sets it, give or take a second; shown to the minute
+            $expiresAt = gmdate('Y-m-d H:i', time() + 3600);
+            $body = InvitationView::render($email, $token, $directory, $baseUrl, $expiresAt);
+            if (!$mailEngine->send($email, InvitationView::subject($directory, $baseUrl), $body)) {
                 $error = $mailEngine->lastError() ?? 'unknown error';
             }
         } catch (\Exception $e) {
@@ -728,7 +733,10 @@ class AdminController
             'delivery' => $delivery['delivery'],
             'invitation_sent' => $delivery['error'] === null,
         ]);
-        self::answerDelivery($delivery, 'Invitation resent', 'The invitation e-mail could not be sent. See the application log.');
+        self::answerDelivery($delivery, 'Invitation resent',
+            'The invitation e-mail could not be sent (details in the application log, mail_send_failure). The previous link '
+            . 'no longer works and the open sessions of the account have ended. Check the mail configuration with '
+            . 'bin/send-test-mail.php, then resend.');
     }
 
     private static function listGroupsWithDetails($config, PDO $db)

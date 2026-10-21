@@ -95,9 +95,11 @@ final class MailTest extends FeatureTestCase
 
         $data = $this->decoded($message['data']);
         $this->assertStringContainsString('From: DFIR FM Test <noreply@dfir.test>', $data);
-        $this->assertStringContainsString('Subject: You have been invited to contribute on ' . $this->server->url, $data);
+        $this->assertStringContainsString('Subject: Invitation to contribute to /case-1 on 127.0.0.1', $data);
+        $this->assertMatchesRegularExpression('/expires at \d{4}-\d\d-\d\d \d\d:\d\d UTC/', $data);
         $this->assertStringContainsString('multipart/alternative', $data);
-        $this->assertStringContainsString('charset=utf-8', $data);
+        // us-ascii when the message holds no other character (PHPMailer); decoded() checks every part is UTF-8
+        $this->assertMatchesRegularExpression('/charset=(utf-8|us-ascii)/i', $data);
         $this->assertStringContainsString('token=' . $this->invitationToken(), $data);
 
         $invited = $this->server->logEntries('user_invited');
@@ -129,6 +131,8 @@ final class MailTest extends FeatureTestCase
         $this->assertFalse($response['success']);
         $this->assertStringContainsString('could not be sent', $response['message']);
         $this->assertStringNotContainsString('127.0.0.1', $response['message'], 'details stay in the log');
+        $this->assertStringContainsString('added to the group "/case-1 contributors"', $response['message'], 'says what was done');
+        $this->assertStringContainsString('Resend invitation', $response['message'], 'and what to do next');
 
         $failures = $this->server->logEntries('mail_send_failure');
         $this->assertCount(1, $failures);

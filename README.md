@@ -13,8 +13,8 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
 - **Support for Large Files:** Upload and manage large files with seamless chunked uploads.
 - **File Integrity:** Automatically calculates and stores the SHA256 hash for all uploaded files.
 - **SQLite Database:** Stores access rights and file metadata in a lightweight, portable database, set up automatically by the application.
-- **Dynamic Contributors:** Easily add or remove collaborators with granular access rights.
-- **Flexible Mail Integration:** Send invitations via the local sendmail, SMTP, or SendGrid.
+- **Dynamic Contributors:** Invite contributors into a case folder: they join the folder's own group with upload-only access by default, set their password from a single-use link, and only see their own uploads unless granted more.
+- **Flexible Mail Integration:** Send invitations via the local sendmail, SMTP, or SendGrid; on air-gapped hosts (`mail_engine=none`), the invitation link is shown to the administrator instead, to be passed on through another channel.
 - **Forensic-Proof Evidence Handling:** Built with the principles of chain-of-custody and forensic soundness in mind.
 - **Docker Support:** Deploy DFIR FM with Docker Compose for ease of setup.
 
@@ -55,6 +55,7 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
      ```bash
      sudo -u www-data php bin/send-test-mail.php you@yourdomain.com
      ```
+     On a host that can't send mail, set `mail_engine=none`: invitation links are then shown to the administrator, who passes them on through another channel.
    - Create the first administrator (prints a random password once):
      ```bash
      sudo -u www-data php bin/create-admin.php you@yourdomain.com
@@ -88,20 +89,25 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
 4. **Dynamic Collaboration:**
    - Add or revoke access for contributors dynamically during investigations.
 
-5. **Mail Invitation System:**
-   - Use flexible mail mechanisms (local sendmail, SMTP, or SendGrid) to send invitations to contributors.
+5. **Invitations:**
+   - Contributors are invited into a case folder (never the root) and join that folder's default group, `<folder> contributors`, which gets upload-only access when created. The invitation link is single-use, valid one hour, and asks the contributor to choose a password (at least 12 characters).
+   - Links are sent by mail (local sendmail, SMTP or SendGrid) or, with `mail_engine=none`, shown to the administrator to pass on.
+   - "Resend invitation" (Users tab) sends a new link, which also serves as a password reset; Lock / Unlock / Delete manage the account.
 
 ### Example Workflow
-1. **Upload Evidence Files:**
+1. **Open a Case and Invite Contributors:**
+   - An administrator creates a folder for the case, opens it and invites contributors by e-mail address. Each one gets a link, sets a password and lands in the folder.
+
+2. **Upload Evidence Files:**
    - Users with upload permissions can securely upload files.
 
-2. **Manage Access:**
-   - Admins can assign or revoke access rights for directories.
+3. **Manage Access:**
+   - Admins can assign or revoke access rights for directories, e.g. let the case's contributors see each other's files by giving its default group the read right.
 
-3. **Verify Integrity:**
+4. **Verify Integrity:**
    - SHA256 hashes ensure the integrity of all uploaded files.
 
-4. **Audit Actions:**
+5. **Audit Actions:**
    - Every action is logged, providing a detailed audit trail.
 
 ---

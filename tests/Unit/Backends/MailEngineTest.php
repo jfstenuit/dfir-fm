@@ -182,9 +182,30 @@ final class MailEngineTest extends TestCase
 
         $this->assertStringNotContainsString('<', $text);
         $this->assertStringNotContainsString('font-family', $text);
-        $this->assertStringContainsString('Dear Contributor,', $text);
+        $this->assertStringContainsString('the folder /case-1 of the DFIR FM file manager on dfir.test', $text);
         $this->assertStringContainsString('token=abc123', $text);
         $this->assertDoesNotMatchRegularExpression('/\n{3,}/', $text);
+    }
+
+    public function testInvitationWording(): void
+    {
+        $html = InvitationView::render('alice@example.org', 'abc123', '/case-1', 'https://dfir.test/fm', '2026-10-21 14:05');
+        $text = MailText::fromHtml($html);
+        $this->assertStringContainsString('with the account alice@example.org', $text);
+        $this->assertStringContainsString('at least 12 characters', $text);
+        $this->assertStringContainsString('expires at 2026-10-21 14:05 UTC', $text);
+        $this->assertStringContainsString('Do not forward this message', $text);
+        $this->assertSame('Invitation to contribute to /case-1 on dfir.test', InvitationView::subject('/case-1', 'https://dfir.test/fm'));
+
+        // A resend: no folder, and the new password replaces the old one
+        $resend = MailText::fromHtml(InvitationView::render('alice@example.org', 'abc123', '/', 'https://dfir.test/fm'));
+        $this->assertStringContainsString('sent you a new link for your account alice@example.org', $resend);
+        $this->assertStringContainsString('the new one replaces it', $resend);
+        $this->assertStringContainsString('directory=%2F', $resend);
+        $this->assertSame('Your new DFIR FM link for dfir.test', InvitationView::subject('/', 'https://dfir.test/fm'));
+
+        $hostile = InvitationView::render('alice@example.org', 'abc123', '/<b>case</b>', 'https://dfir.test/fm');
+        $this->assertStringNotContainsString('<b>case</b>', $hostile, 'folder names are escaped');
     }
 
     public function testPlainTextEntitiesDecodeToUtf8(): void

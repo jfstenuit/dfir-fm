@@ -13,11 +13,28 @@ class InvitationView
             . '&directory=' . urlencode($directory);
     }
 
-    public static function render($email, $token, $directory, $baseUrl)
+    /** The subject of an invitation ($directory a folder) or of a new link ('/', a resend) */
+    public static function subject(string $directory, string $baseUrl): string
+    {
+        $host = parse_url($baseUrl, PHP_URL_HOST) ?: $baseUrl;
+        return $directory === '/'
+            ? "Your new DFIR FM link for $host"
+            : "Invitation to contribute to $directory on $host";
+    }
+
+    /**
+     * The invitation e-mail (HTML; MailText derives the plain-text part).
+     * $directory '/' is a resend: a new link, which also resets a password.
+     * $expiresAt: when the link stops working (UTC, as shown).
+     */
+    public static function render($email, $token, $directory, $baseUrl, ?string $expiresAt = null)
     {
         $url = self::link($email, $token, $directory, $baseUrl);
+        $e = fn(string $value) => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+        $host = parse_url($baseUrl, PHP_URL_HOST) ?: $baseUrl;
+        $resend = $directory === '/';
+        $expiry = $expiresAt !== null ? "at $expiresAt UTC, one hour after it was sent" : 'one hour after it was sent';
 
-        // Start output buffering
         ob_start();
         ?>
 <!DOCTYPE html>
@@ -25,68 +42,39 @@ class InvitationView
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Invitation to Collaborate</title>
+    <title><?= $e(self::subject($directory, $baseUrl)) ?></title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
-            color: #333;
-            margin: 0;
-            padding: 0;
-        }
-        .email-container {
-            max-width: 600px;
-            margin: 20px auto;
-            background: #ffffff;
-            border-radius: 8px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-            padding: 20px;
-        }
-        .email-header {
-            text-align: center;
-            font-size: 24px;
-            font-weight: bold;
-            margin-bottom: 20px;
-        }
-        .email-content {
-            line-height: 1.6;
-        }
-        .email-content a {
-            color: #007BFF;
-            text-decoration: none;
-        }
-        .email-content a:hover {
-            text-decoration: underline;
-        }
-        .email-footer {
-            margin-top: 20px;
-            text-align: center;
-            font-size: 12px;
-            color: #777;
-        }
+        body { font-family: Arial, sans-serif; background-color: #f4f4f4; color: #333; margin: 0; padding: 0; }
+        .email-container { max-width: 600px; margin: 20px auto; background: #ffffff; border-radius: 8px; padding: 20px; }
+        .email-header { font-size: 20px; font-weight: bold; margin-bottom: 16px; }
+        .email-content { line-height: 1.6; }
+        .email-content a { color: #0b5ed7; }
+        .email-footer { margin-top: 20px; font-size: 12px; color: #666; }
     </style>
 </head>
 <body>
     <div class="email-container">
-        <div class="email-header">Invitation to Collaborate</div>
+        <div class="email-header"><?= $resend ? 'A new link for your DFIR FM account' : 'Invitation to contribute' ?></div>
         <div class="email-content">
-            <p>Dear Contributor,</p>
-            <p>You have been invited to collaborate in the directory <strong><?php echo htmlspecialchars($directory); ?></strong> on <strong><?php echo htmlspecialchars(parse_url($baseUrl, PHP_URL_HOST)); ?></strong>.</p>
-            <p>To upload files and participate, please click the link below:</p>
-            <p><a href="<?php echo htmlspecialchars($url); ?>">Collaborate Now</a></p>
-            <p>If the button above does not work, copy and paste the following URL into your browser:</p>
-            <p><code><?php echo htmlspecialchars($url); ?></code></p>
-            <p>We look forward to your contributions!</p>
+            <p>Hello,</p>
+<?php if ($resend): ?>
+            <p>An administrator of the DFIR FM file manager on <strong><?= $e($host) ?></strong> sent you a new link for your account <strong><?= $e($email) ?></strong>.</p>
+<?php else: ?>
+            <p>You have been invited to contribute files to the folder <strong><?= $e($directory) ?></strong> of the DFIR FM file manager on <strong><?= $e($host) ?></strong>, with the account <strong><?= $e($email) ?></strong>.</p>
+<?php endif; ?>
+            <p>Open the link below and choose a password (at least 12 characters); you are then logged in<?= $resend ? '' : ' and taken to the folder' ?>.<?= $resend ? ' If you already had a password, the new one replaces it.' : '' ?></p>
+            <p><a href="<?= $e($url) ?>">Set my password</a></p>
+            <p>If the link above does not work, copy this address into your browser:</p>
+            <p><code><?= $e($url) ?></code></p>
+            <p>The link works once and expires <?= $e($expiry) ?>. When it has expired, ask the person who invited you for a new one.</p>
         </div>
         <div class="email-footer">
-            <p>This invitation is valid for a limited time. Please act promptly.</p>
-            <p>&copy; <?php echo date('Y'); ?> DFIR-FM. All rights reserved.</p>
+            <p>Do not forward this message: the link gives access to your account. If you did not expect it, ignore it: nothing happens unless the link is used.</p>
         </div>
     </div>
 </body>
 </html>
         <?php
-        // Return the buffered content
         return ob_get_clean();
     }
 }

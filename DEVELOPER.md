@@ -288,6 +288,17 @@ Listings show the uploader of its files as `deleted user #<id>` (and `unknown us
 
 The pseudonym is pseudonymous, not anonymous: anyone who has the address can compute its hash and find the account. That is the purpose: an investigation about an address can still find what the account did, with `bin/find-deleted-user.php`. Under the GDPR it remains personal data. The application log keeps clear addresses in the events logged before the deletion, for the log's own retention period.
 
+#### Invitation workflow
+
+1. **Invite** (D14, D15, D21). An administrator opens a subfolder, clicks Invite, enters the address and leaves "Add to the default group of this folder" ticked (or unticks it to grant access later by hand). The account is created if needed; with the box ticked it joins `<folder path> contributors`, created with upload-only access if missing. No group's rights are changed. Logged: `user_invited`, and `group_created` for a new default group.
+2. **Delivery.** `deliverInvitation()` issues a token (128 random bits, one hour, D23) and either mails the link (`InvitationView`: subject "Invitation to contribute to <folder> on <host>", the account, the folder, the expiry time in UTC, the 12-character rule, a warning not to forward it) or, with `mail_engine=none`, returns it to the administrator, who copies it from the dialog and passes it on through another channel. The link is shown once and never logged. If the mail fails, the account and its membership stay; the administrator is told what was done and to resend once the mail configuration works (`bin/send-test-mail.php`).
+3. **First login** (D24). The link opens a form asking for a password, twice; nothing happens until it is submitted (mail scanners following links neither log in nor use the token). The form sets the password, uses up the token, ends any older session of the account and logs the invitee in, in the invitation folder. An expired, used or replaced link shows one message: ask for a new invitation.
+4. **Afterwards.** The contributor logs in with address and password. Group memberships decide what they see: an upload-only contributor sees only their own uploads. Administrators widen or narrow a default group's rights in the folder's Access Rights dialog.
+5. **Resend** (D22). From the Users tab, after a confirmation: a new link to `/` (memberships lead to the folders), the previous link stops working and the account's open sessions end. Since the link sets a new password, this is also the password reset for a contributor who forgot theirs. Mailed with the subject "Your new DFIR FM link for <host>", or shown once in a dialog with `mail_engine=none`.
+6. **Lock, unlock, delete.** Lock removes the password and any pending link and ends sessions; a locked account can't be re-invited until an administrator unlocks it (no credentials are issued: resend afterwards). Delete is final (see *Deleted accounts*); the address can be invited again as a new account.
+
+Installations upgraded from invitations by e-mail domain (groups `<domain> users`, DFM-01) keep those groups and their rights: `bin/report-domain-groups.php` lists them for review.
+
 ---
 
 ### 2. **User Self-Service**
@@ -502,7 +513,7 @@ Mail is only used for invitation links. `MailEngineFactory::create()` reads the 
 - `sendgrid`: SendGrid Web API v3. An HTTP status ≥ 400 counts as a failure, with SendGrid's error body in the reason.
 - `none`: no mail, for hosts that cannot send any (air-gapped, no relay). `default_mail_from` is not required. `MailEngineFactory::isManual()` tells callers that the link is to be handed to the administrator instead (the invite dialog shows it with a Copy button; the answer carries `Cache-Control: no-store`). `MailEngineNone::send()` always returns `false`, so a caller that skips the check fails visibly. `bin/send-test-mail.php` says that mail is disabled and exits 0.
 
-All engines send UTF-8 HTML with a plain-text alternative (`MailText::fromHtml()`), from `default_mail_from` / `default_mail_from_name`. `send()` returns `false` on failure and `lastError()` gives the reason; it doesn't throw. The caller logs failures as `mail_send_failure` (recipient, engine, error). Invitations go through `AdminController::deliverInvitation()`, which issues the token and either mails the link or returns it. An invitation whose e-mail fails still creates the contributor; the admin gets `success: false` with a generic message, and the details go to the log only.
+All engines send UTF-8 HTML with a plain-text alternative (`MailText::fromHtml()`), from `default_mail_from` / `default_mail_from_name`. `send()` returns `false` on failure and `lastError()` gives the reason; it doesn't throw. The caller logs failures as `mail_send_failure` (recipient, engine, error). Invitations go through `AdminController::deliverInvitation()`, which issues the token and either mails the link or returns it. An invitation whose e-mail fails still creates the contributor (and its membership); the admin gets `success: false` with a message saying what was done and to resend once `bin/send-test-mail.php` works, while the details (SMTP replies, configuration problems) go to the log only.
 
 ### Storage engine
 
