@@ -133,6 +133,7 @@ final class DatabaseTest extends TestCase
             total_chunks INTEGER NOT NULL, last_chunk_index INTEGER NOT NULL DEFAULT 0, hash_state TEXT NOT NULL,
             storage_path TEXT NOT NULL, status TEXT DEFAULT 'pending', last_update DATETIME, created_at DATETIME, user_id INTEGER NOT NULL)");
         $db->exec("PRAGMA user_version = 1");
+        $db->exec("PRAGMA foreign_keys = OFF"); // v1 databases didn't enforce them
         $seed($db);
     }
 
@@ -174,6 +175,7 @@ final class DatabaseTest extends TestCase
     public function testMigrationV4RepairsReferencesToMissingRows(): void
     {
         $db = $this->init('v3.sqlite');
+        $db->exec("PRAGMA foreign_keys = OFF"); // to create the rows a v3 database may hold
         $db->exec("INSERT INTO users (id, username, password) VALUES (2, 'kept@example.org', 'x')");
         $db->exec("INSERT INTO groups (id, name) VALUES (5, 'kept')");
         $db->exec("INSERT INTO directories (id, name, path, parent_id, created_by) VALUES (10, 'case', '/case', 1, 7)");
@@ -207,6 +209,24 @@ final class DatabaseTest extends TestCase
         $this->assertStringContainsString('user id 8 no longer existed', $log);
         $this->assertStringContainsString('deleted 2 user_group row(s)', $log);
         $this->assertStringContainsString('kept, to review: files id 2 refers to a missing directories row', $log);
+    }
+
+    public function testForeignKeysAreEnforced(): void
+    {
+        $db = $this->init('fk.sqlite');
+        $this->assertSame(1, self::scalar($db, 'PRAGMA foreign_keys'));
+
+        $db->exec("INSERT INTO users (id, username, password) VALUES (2, 'alice@example.org', 'x')");
+        $db->exec("INSERT INTO files (directory_id, name, size, sha256, uploaded_by) VALUES (1, 'a.bin', 1, 'aa', 2)");
+        try {
+            $db->exec("DELETE FROM users WHERE id = 2");
+            $this->fail('an uploader cannot be deleted');
+        } catch (\PDOException $e) {
+            $this->assertStringContainsString('FOREIGN KEY constraint failed', $e->getMessage());
+        }
+
+        $this->expectException(\PDOException::class);
+        $db->exec("INSERT INTO user_group (user_id, group_id) VALUES (2, 999)");
     }
 
     public function testMigrationV2StopsOnDuplicateFiles(): void

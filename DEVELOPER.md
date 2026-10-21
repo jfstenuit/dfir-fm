@@ -227,7 +227,7 @@ The logger is globally available via `App::getLogger()` and all controller-level
 - Uploads: `upload_start`, `upload_verifying`, `upload_completed` (with size and SHA-256), `upload_name_conflict`, `upload_duplicate_refused`, `upload_denied`, `upload_chunk_rejected`, `upload_failed`, `upload_aborted`, `upload_expired`, `upload_verify_restarted`
 - Downloads: `download_success`, `download_partial`, `download_failure`
 - Folders and files: `directory_created`, `directory_deleted`, `file_deleted`, `filemanager_failure` (a missing folder requested)
-- Administration: `user_invited` (with `invitation_sent`), `user_locked`, `user_deleted` (with `target_user_id` and `pseudonym`), `group_created`, `group_deleted`, `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
+- Administration: `user_invited` (with `invitation_sent`), `user_locked`, `user_deleted` (with `target_user_id` and `pseudonym`), `group_created`, `group_deleted` (with the number of `members` it had), `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
 - Mail failures: `mail_send_failure`
 - Command line: `cli_admin_created` (`bin/create-admin.php`, also when it resets a password), `cli_test_mail_sent` and `cli_deleted_user_lookup` (with `address_hash` and the account ids found), with `username` set to `cli:` + the system user; `upload_expired` from `bin/expire-uploads.php`, without a username
 
@@ -292,7 +292,7 @@ The pseudonym is pseudonymous, not anonymous: anyone who has the address can com
 | 👥 View Groups | List all groups, their members and their folders | Admin UI, Groups tab |
 | ➕ Create Group | By name | File Manager UI (admins): typing a new group name in the access-rights dialog creates it |
 | 👤 Add/Remove Users | Assign or remove users from a group | Admin UI, Users tab |
-| 🗑️ Delete Group | Refused while the group has members, and for the admin group | Admin UI, Groups tab |
+| 🗑️ Delete Group | Deletes the group, its memberships and its access rights: its members lose the access it granted. Refused for the admin group | Admin UI, Groups tab |
 
 ---
 
@@ -335,7 +335,13 @@ All database logic uses raw SQL for performance and transparency.
 
 Extract the database structure with `sqlite3 <database_path> '.schema'` (by default `storage/database/app.sqlite`; in the Docker container, `/data/database/app.sqlite`).
 
-SQLite doesn't enforce the `FOREIGN KEY` clauses here: the application doesn't enable `PRAGMA foreign_keys`, so `ON DELETE CASCADE` has no effect. Deleting a group or a folder leaves its `access_rights` rows (migration v4 removed those left until then). `AUTOINCREMENT` ids are never reused, so these rows grant nothing, but they remain.
+The `FOREIGN KEY` clauses are enforced: `Database::initialize()` sets `PRAGMA foreign_keys = ON` on every connection, after the migrations (which repair rows the constraints would refuse, see v4). So:
+- a `users` row referenced by a file, a folder or an upload can't be deleted (accounts are soft-deleted, see *Deleted accounts*);
+- deleting a group deletes its `user_group` and `access_rights` rows;
+- deleting a folder (empty ones only) deletes its `access_rights` rows and its `uploads` records; it is refused while an upload into it is in progress;
+- a `files` row keeps its folder: a folder with files can't be deleted.
+
+The read-only scripts (`bin/check-integrity.php`, `bin/find-deleted-user.php`) open the database themselves without the pragma, which only matters for writes. Rows that predate the enforcement and still refer to a missing row are listed by `bin/check-integrity.php` (`REFERENCE`).
 
 Database structure is : 
 ```
@@ -463,7 +469,7 @@ As on every route, an expired session gets a redirect to the login page and a re
 - The geometry (size, chunk size, chunk count, name, folder) is fixed by the first chunk and checked on every chunk: every chunk but the last has exactly `dzchunksize` bytes, at offset `index × chunk size`. An empty file is one empty chunk.
 - Each chunk is written at its offset into the staging element (`.uploads/<server key>` with the local engine) and recorded in `upload_chunks`, so a chunk sent twice or out of order is harmless. Rights are re-checked on every request.
 - `complete` checks that every chunk is present and the staged size, then hashes the staged file read back from storage (progress in `verified_bytes`), re-checks the rights, the name and duplicate content, then inserts `files` with the real size and moves the file into place in one transaction. A verification without progress for 120 s (the request running it died) is restarted by the next `complete` or `status`.
-- States: `in_progress → verifying → completed`, or `aborted`, `failed`, `expired`. Terminal rows are kept for the audit trail; their chunk rows and staging files are deleted. Uploads without activity for `upload_stale_after` seconds expire (when an upload starts, or with `bin/expire-uploads.php`).
+- States: `in_progress → verifying → completed`, or `aborted`, `failed`, `expired`. Terminal rows are kept for the audit trail (until their folder is deleted; the upload events stay in the log); their chunk rows and staging files are deleted. Uploads without activity for `upload_stale_after` seconds expire (when an upload starts, or with `bin/expire-uploads.php`).
 
 **Client** (`filemanager.js`): `forceChunking`, 2 MiB chunks, one at a time, `retryChunks` ×3. Dropzone's `accept` hook sends `checkRights`; `chunksUploaded` sends `complete` and polls `status` every second, showing "Verifying stored file… n%". If the `complete` response is lost (e.g. a proxy timeout on a long verification), the polls deliver the outcome. Dropzone's `canceled` event sends `abort`. A refusal's message stays visible under the file's preview.
 

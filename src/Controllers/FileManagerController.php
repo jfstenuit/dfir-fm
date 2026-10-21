@@ -95,7 +95,16 @@ class FileManagerController
                 return;
             }
 
-            // Remove database entry
+            // The foreign keys delete the folder's upload records: refuse
+            // while one is active, its staging file would be left behind
+            $active = $db->prepare("SELECT COUNT(*) FROM uploads WHERE directory_id = :id AND status IN ('in_progress', 'verifying')");
+            $active->execute([':id' => $itemId]);
+            if ($active->fetchColumn() > 0) {
+                echo json_encode(['success' => false, 'message' => 'An upload into this directory is in progress']);
+                return;
+            }
+
+            // Remove database entry (its access rights and upload records go with it)
             $stmt = $db->prepare("DELETE FROM directories WHERE id = :id");
             $stmt->bindParam(':id', $itemId, PDO::PARAM_INT);
             $stmt->execute();

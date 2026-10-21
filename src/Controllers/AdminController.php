@@ -752,21 +752,16 @@ class AdminController
             return;
         }
 
-        // Optional: Warn if it has members
+        // Groups only grant access (D18): deleting one is final, and the
+        // foreign keys remove its memberships and access rights with it
         $stmtCheck = $db->prepare("SELECT COUNT(*) FROM user_group WHERE group_id = :gid");
         $stmtCheck->execute([':gid' => $group['id']]);
-        $count = $stmtCheck->fetchColumn();
+        $members = (int)$stmtCheck->fetchColumn();
 
-        if ($count > 0) {
-            echo json_encode(['success' => false, 'message' => 'Cannot delete group with members. Remove users first.']);
-            return;
-        }
-
-        // Proceed to delete (will cascade in access_rights, user_group)
         $stmt = $db->prepare("DELETE FROM groups WHERE id = :id");
         $success = $stmt->execute([':id' => $group['id']]);
 
-        App::getLogger()->log('group_deleted', ['group'=>$groupName]);
+        App::getLogger()->log('group_deleted', ['group' => $groupName, 'members' => $members]);
 
         echo json_encode(['success' => $success]);
     }

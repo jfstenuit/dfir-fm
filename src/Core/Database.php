@@ -22,6 +22,11 @@ class Database
             // Initialize tables if needed
             self::createTables();
 
+            // Enforced from here on; migrations run without it, since they
+            // repair rows the constraints would refuse (SQLite ignores the
+            // pragma inside a transaction, so it is set per connection here)
+            self::$connection->exec("PRAGMA foreign_keys = ON");
+
             return self::$connection;
         } catch (Exception $e) {
             throw new Exception("Database connection failed: " . $e->getMessage());

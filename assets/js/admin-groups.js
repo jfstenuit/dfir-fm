@@ -50,7 +50,7 @@ function groupRow(group) {
 }
 
 async function deleteGroup(name) {
-    if (!name || !confirm(`Delete group "${name}"?`)) return;
+    if (!name || !confirm(`Delete group "${name}"?\n\nIts members lose the access rights it grants.`)) return;
     try {
         const response = await api('admin', { data: { a: 'deleteGroup', name } });
         showResultMessage(response?.message || 'Group deleted.', true);
