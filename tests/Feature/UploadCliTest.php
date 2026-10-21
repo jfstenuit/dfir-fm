@@ -34,6 +34,27 @@ final class UploadCliTest extends FeatureTestCase
         $this->assertSame('changed!', file_get_contents("$files/tampered.bin"), 'read-only');
     }
 
+    public function testIntegrityWalksTheStorageThroughTheEngine(): void
+    {
+        $files = $this->server->root . '/storage/files';
+        mkdir("$files/case/sub", 0777, true);
+        file_put_contents("$files/case/sub/deep.bin", 'nested orphan');
+        symlink('/etc/passwd', "$files/passwd");
+        posix_mkfifo("$files/fifo", 0600);
+        $this->server->addFile('linked.bin', 'alpha');
+        unlink("$files/linked.bin");
+        file_put_contents("$files/target.bin", 'alpha');
+        symlink("$files/target.bin", "$files/linked.bin");
+
+        $result = $this->server->runBin('check-integrity.php');
+        $this->assertSame(1, $result['exit']);
+        $this->assertMatchesRegularExpression('#^ORPHAN +/case/sub/deep\.bin: in storage#m', $result['stdout']);
+        $this->assertMatchesRegularExpression('#^ORPHAN +/passwd: symbolic link#m', $result['stdout']);
+        $this->assertMatchesRegularExpression('#^ORPHAN +/fifo: special file#m', $result['stdout']);
+        $this->assertMatchesRegularExpression('#^LINK +/linked\.bin: stored as a symbolic link$#m', $result['stdout']);
+        $this->assertStringContainsString('1 file(s) re-hashed, 5 problem(s).', $result['stdout']); // target.bin is an orphan too
+    }
+
     public function testIntegrityReportsReferencesToMissingRows(): void
     {
         $this->server->addFile('a.bin', 'alpha', 999);

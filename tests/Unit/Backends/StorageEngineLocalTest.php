@@ -118,6 +118,58 @@ final class StorageEngineLocalTest extends TestCase
         (new StorageEngineLocal($this->dir))->stagingCreate('../../etc/x');
     }
 
+    public function testListDirectoryClassifiesEntries(): void
+    {
+        file_put_contents("$this->dir/b.bin", 'four');
+        touch("$this->dir/b.bin", 1700000000);
+        mkdir("$this->dir/case");
+        symlink('/etc/passwd', "$this->dir/link");
+        symlink("$this->dir/case", "$this->dir/dirlink");
+        posix_mkfifo("$this->dir/fifo", 0600);
+        $engine = new StorageEngineLocal($this->dir);
+        $engine->healthCheck(); // creates the staging directory
+
+        $entries = $engine->listDirectory('/');
+        $this->assertSame(['b.bin', 'case', 'dirlink', 'fifo', 'file', 'link'], array_column($entries, 'name'), 'sorted, staging left out');
+        $this->assertSame(['file', 'directory', 'link', 'other', 'file', 'link'], array_column($entries, 'type'), 'links never followed');
+        $this->assertSame(['name' => 'b.bin', 'type' => 'file', 'size' => 4, 'mtime' => 1700000000], $entries[0]);
+        $this->assertNull($entries[1]['size'], 'size for files only');
+        $this->assertTrue($engine->supportsNamedFiles());
+    }
+
+    public function testListDirectoryStagingNameOnlyReservedAtTheRoot(): void
+    {
+        mkdir("$this->dir/case/.uploads", 0777, true);
+        $this->assertSame(['.uploads'], array_column((new StorageEngineLocal($this->dir))->listDirectory('/case'), 'name'));
+    }
+
+    public function testListDirectoryOfAFolderNotStoredYetIsEmpty(): void
+    {
+        $this->assertSame([], (new StorageEngineLocal($this->dir))->listDirectory('/case/never-stored'));
+    }
+
+    public function testListDirectoryRefusesAFileOrALink(): void
+    {
+        mkdir("$this->dir/case");
+        symlink("$this->dir/case", "$this->dir/dirlink");
+        $engine = new StorageEngineLocal($this->dir);
+        foreach (['/file', '/dirlink'] as $path) {
+            try {
+                $engine->listDirectory($path);
+                $this->fail("$path listed");
+            } catch (\RuntimeException $e) {
+                $this->assertStringContainsString('Not a directory', $e->getMessage());
+            }
+        }
+    }
+
+    #[DataProvider('traversalPaths')]
+    public function testListDirectoryTraversalRefused(string $path): void
+    {
+        $this->expectException(\Exception::class);
+        (new StorageEngineLocal($this->dir))->listDirectory($path);
+    }
+
     public function testHealthCheckLeavesTheRootAlone(): void
     {
         $engine = new StorageEngineLocal($this->dir);

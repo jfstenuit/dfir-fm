@@ -173,6 +173,54 @@ class StorageEngineLocal implements StorageEngineInterface
         return fopen($absolutePath, 'rb') ?: null;
     }
 
+    public function supportsNamedFiles(): bool
+    {
+        return true;
+    }
+
+    public function listDirectory(string $directory): array
+    {
+        $absolutePath = $this->validatePath($directory);
+        // Folders are created when their first file is stored and pruned
+        // with their last one: no directory means nothing stored there
+        if (!file_exists($absolutePath) && !is_link($absolutePath)) {
+            return [];
+        }
+        if (is_link($absolutePath) || !is_dir($absolutePath)) {
+            throw new \RuntimeException("Not a directory: $directory");
+        }
+        $names = @scandir($absolutePath, SCANDIR_SORT_NONE);
+        if ($names === false) {
+            throw new \RuntimeException("Directory not readable: $directory");
+        }
+
+        $entries = [];
+        foreach ($names as $name) {
+            if ($name === '.' || $name === '..'
+                || ($absolutePath === $this->baseDirectory && $name === self::STAGING_DIRECTORY)) {
+                continue;
+            }
+            $entryPath = $absolutePath . DIRECTORY_SEPARATOR . $name;
+            // lstat: a symlink is reported, never followed
+            $stat = @lstat($entryPath);
+            $type = match (true) {
+                $stat === false => 'other',
+                is_link($entryPath) => 'link',
+                is_dir($entryPath) => 'directory',
+                is_file($entryPath) => 'file',
+                default => 'other',
+            };
+            $entries[] = [
+                'name' => $name,
+                'type' => $type,
+                'size' => $type === 'file' ? (int)$stat['size'] : null,
+                'mtime' => $stat === false ? null : (int)$stat['mtime'],
+            ];
+        }
+        usort($entries, fn($a, $b) => strcmp($a['name'], $b['name']));
+        return $entries;
+    }
+
     /** The staging directory, created on first use; null if it can't be */
     private function stagingDirectory(): ?string
     {

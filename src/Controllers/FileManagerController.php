@@ -9,6 +9,7 @@ use Core\Response;
 use Core\App;
 use Middleware\AccessMiddleware;
 use Backends\StorageEngineFactory;
+use Services\NameRules;
 use Views\FileManagerView;
 
 use PDO;
@@ -176,14 +177,8 @@ class FileManagerController
             return;
         }
 
-        // Validate name: must be a valid directory name. No leading dot:
-        // '.', '..', and the storage's staging directory '.uploads'
-        if (
-            !mb_check_encoding($folderName, 'UTF-8') ||
-            preg_match('/[<>\/\\\\&]/u', $folderName) ||
-            preg_match('/[\x00-\x1F\x7F]/', $folderName) ||
-            str_starts_with($folderName, '.')
-        ) {
+        // Validate name: must be a valid directory name
+        if (!NameRules::validFolderName($folderName)) {
             error_log("Invalid directory name: $folderName");
             echo json_encode(['success' => false, 'message' => 'Invalid directory name']);
             return;

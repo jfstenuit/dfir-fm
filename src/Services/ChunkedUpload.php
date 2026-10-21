@@ -550,11 +550,7 @@ final class ChunkedUpload
     /** Names the storage can hold, the same on every engine */
     private function validateName(string $name, array $directory): void
     {
-        $valid = $name !== '' && $name !== '.' && $name !== '..' && strlen($name) <= 255
-            && mb_check_encoding($name, 'UTF-8')
-            && !preg_match('#[\x00-\x1F\x7F/\\\\]#', $name)
-            && !preg_match('/%[0-9a-fA-F]{2}/', $name); // the storage refuses URL-encoded sequences
-        if (!$valid) {
+        if (!NameRules::validFileName($name)) {
             throw new UploadException(400, 'InvalidName', 'This file name is not supported (control characters, slashes, "%" followed by two hex digits, or longer than 255 bytes).');
         }
         if ($directory['path'] === '/' && $name === StorageEngineLocal::STAGING_DIRECTORY) {

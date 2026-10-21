@@ -36,6 +36,27 @@ interface StorageEngineInterface
      */
     public function readStream(string $path);
 
+    /**
+     * Whether stored elements have names in a folder tree that can be
+     * browsed (a local file system), unlike a blob store where an element
+     * is a key without a folder of its own. Callers ask this instead of
+     * testing the storage_engine setting.
+     */
+    public function supportsNamedFiles(): bool;
+
+    /**
+     * The direct entries of one directory, sorted by name. The engine's own
+     * entries (the staging area) are left out. A directory with nothing
+     * stored under it lists as empty.
+     *
+     * @return list<array{name:string, type:string, size:?int, mtime:?int}>
+     *   type is 'file', 'directory', 'link' (never followed) or 'other'
+     *   (devices, sockets, pipes); size is set for files only.
+     * @throws \LogicException If the engine has no named files.
+     * @throws \RuntimeException If the path is not a directory or can't be read.
+     */
+    public function listDirectory(string $directory): array;
+
     /*
      * Staging: an upload is assembled in a staging element, outside every
      * user-visible path, and only appears at its final path once complete

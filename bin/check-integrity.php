@@ -7,8 +7,9 @@
 // files.size. Also reports:
 //   - files rows sharing a name or a SHA-256 in one directory (these stop
 //     schema migration v2; the v1 upload code could create them)
-//   - with storage_engine=local, files in storage without a database record
-//     (e.g. partial uploads left by v1)
+//   - with a storage engine that has named files (local), files in storage
+//     without a database record (e.g. partial uploads left by v1), symbolic
+//     links, special files and folders that can't be read
 //   - rows that refer to a missing row (PRAGMA foreign_key_check)
 //
 // Read-only: it never changes the database or the storage. Run it as the web
@@ -28,7 +29,7 @@ require_once BASE_PATH . '/vendor/autoload.php';
 use Core\Config;
 use Core\Database;
 use Backends\StorageEngineFactory;
-use Backends\StorageEngineLocal;
+use Services\DirectoryRefresh;
 
 try {
     $config = Config::load(ENV_FILE);
@@ -39,6 +40,7 @@ try {
         PDO::SQLITE_ATTR_OPEN_FLAGS => PDO::SQLITE_OPEN_READONLY,
     ]);
     $storage = StorageEngineFactory::create($config);
+    $refresh = new DirectoryRefresh($db, $storage);
 } catch (\Throwable $e) {
     fwrite(STDERR, 'Error: ' . $e->getMessage() . "\n");
     exit(2);
@@ -69,38 +71,36 @@ foreach ($files as $file) {
     $path = rtrim($file['directory'], '/') . '/' . $file['name'];
     $expected[$path] = true;
 
-    try {
-        $stream = $storage->readStream($path);
-    } catch (\Throwable $e) {
-        $stream = null;
-    }
-    if (!$stream) {
+    $stored = $refresh->hash($path);
+    if ($stored === null) {
         $report("MISSING    $path (file id {$file['id']})");
         continue;
     }
-    $context = hash_init('sha256');
-    $size = hash_update_stream($context, $stream);
-    fclose($stream);
-    $sha256 = hash_final($context);
     $checked++;
 
-    if ($size !== (int)$file['size']) {
-        $report("SIZE       $path (file id {$file['id']}): $size bytes stored, {$file['size']} recorded");
+    if ($stored['size'] !== (int)$file['size']) {
+        $report("SIZE       $path (file id {$file['id']}): {$stored['size']} bytes stored, {$file['size']} recorded");
     }
-    if ($sha256 !== $file['sha256']) {
-        $report("HASH       $path (file id {$file['id']}): stored $sha256, recorded " . ($file['sha256'] ?? 'none'));
+    if ($stored['sha256'] !== $file['sha256']) {
+        $report("HASH       $path (file id {$file['id']}): stored {$stored['sha256']}, recorded " . ($file['sha256'] ?? 'none'));
     }
 }
 
-if (($config['storage_engine'] ?? '') === 'local') {
-    $base = rtrim(realpath($config['base_storage_directory']), '/');
-    $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS));
-    foreach ($iterator as $entry) {
-        $path = substr($entry->getPathname(), strlen($base));
-        if ($entry->isFile() && !isset($expected[$path]) && !str_starts_with($path, '/' . StorageEngineLocal::STAGING_DIRECTORY . '/')) {
-            $report("ORPHAN     $path: in storage, no database record");
-        }
+// Orphans need a folder tree to walk: a blob store has none
+if ($storage->supportsNamedFiles()) {
+    foreach ($refresh->walk() as $path => $entry) {
+        match ($entry['type']) {
+            'file' => isset($expected[$path]) || $report("ORPHAN     $path: in storage, no database record"),
+            // Downloads would follow it out of the storage
+            'link' => $report(isset($expected[$path]) ? "LINK       $path: stored as a symbolic link"
+                                                      : "ORPHAN     $path: symbolic link in storage, no database record"),
+            'other' => $report("ORPHAN     $path: special file in storage, no database record"),
+            'unreadable' => $report("UNREADABLE $path: {$entry['reason']}"),
+            default => null,
+        };
     }
+} else {
+    echo "Orphan search skipped: the storage engine has no named files.\n";
 }
 
 echo "$checked file(s) re-hashed, $problems problem(s).\n";
