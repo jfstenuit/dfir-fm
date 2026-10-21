@@ -6,6 +6,7 @@ use Views\Modals\DeleteConfirmationModal;
 use Views\Modals\OperationResultModal;
 use Views\Modals\ProfileModal;
 use Views\Modals\UserGroupModal;
+use Views\Modals\InvitationLinkModal;
 
 class AdminView
 {
@@ -124,6 +125,7 @@ class AdminView
 OperationResultModal::render();
 DeleteConfirmationModal::render();
 UserGroupModal::render();
+InvitationLinkModal::render();
 ProfileModal::render('');
 ?>
 </body>

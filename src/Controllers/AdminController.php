@@ -54,6 +54,8 @@ class AdminController
             self::removeUserFromGroup($config, $db);
         } elseif ($action === "lockUser") {
             self::lockUser($config, $db);
+        } elseif ($action === "unlockUser") {
+            self::unlockUser($config, $db);
         } elseif ($action === "resendInvite") {
             self::resendInvite($config, $db);
         } elseif ($action === "listGroupsWithDetails") {
@@ -430,7 +432,7 @@ class AdminController
     {
         header('Content-Type: application/json');
 
-        $stmt = $db->query("SELECT id, username, `password`, invitation_token, token_expiry FROM users WHERE deleted_at IS NULL");
+        $stmt = $db->query("SELECT id, username, `password`, invitation_token, token_expiry, locked_at FROM users WHERE deleted_at IS NULL");
         $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $result = [];
@@ -438,19 +440,16 @@ class AdminController
         foreach ($users as $user) {
             $identifier = $user['username'];
 
-            // Determine active vs locked
-            $hasPassword = !empty($user['password']) && $user['password'] !== '!';
-            $hasValidToken = false;
-
-            if (!empty($user['invitation_token']) && !empty($user['token_expiry'])) {
-                $expiry = strtotime($user['token_expiry']);
-                $now = time();
-                if ($expiry > $now) {
-                    $hasValidToken = true;
-                }
+            // locked: by an administrator; active: has a password; invited:
+            // no password yet, with a pending link or an expired one
+            $pending = !empty($user['invitation_token']) && !empty($user['token_expiry']) && strtotime($user['token_expiry']) > time();
+            if ($user['locked_at'] !== null) {
+                $status = 'locked';
+            } elseif (!empty($user['password']) && $user['password'] !== '!') {
+                $status = 'active';
+            } else {
+                $status = 'invited';
             }
-
-            $status = ($hasPassword || $hasValidToken) ? 'active' : 'locked';
 
             // Get group memberships
             $stmtGroups = $db->prepare("
@@ -465,6 +464,7 @@ class AdminController
             $result[] = [
                 'email' => $identifier,
                 'status' => $status,
+                'invitation_pending' => $pending,
                 'groups' => $groups
             ];
         }
@@ -641,12 +641,17 @@ class AdminController
         }
 
         // Lookup user
-        $stmt = $db->prepare("SELECT id FROM users WHERE (email = :email OR username = :email) AND deleted_at IS NULL");
+        $stmt = $db->prepare("SELECT id, locked_at FROM users WHERE (email = :email OR username = :email) AND deleted_at IS NULL");
         $stmt->execute([':email' => $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$user) {
             echo json_encode(['success' => false, 'message' => 'User not found.']);
+            return;
+        }
+
+        if ($user['locked_at'] !== null) {
+            echo json_encode(['success' => false, 'message' => 'This account is already locked.']);
             return;
         }
 
@@ -660,9 +665,12 @@ class AdminController
             return;
         }
 
-        // Lock the user
-        $stmt = $db->prepare("UPDATE users SET password = '!', token_expiry = 0, session_version = session_version + 1 WHERE id = :id");
-        $success = $stmt->execute([':id' => $user['id']]);
+        // Credentials go (password and pending invitation) and open sessions
+        // end; locked_at keeps the account from being re-invited until unlocked
+        $stmt = $db->prepare("UPDATE users SET password = '!', invitation_token = NULL, token_expiry = NULL,
+                                     session_version = session_version + 1, locked_at = :now, locked_by = :by
+                              WHERE id = :id");
+        $success = $stmt->execute([':now' => gmdate('Y-m-d H:i:s'), ':by' => Session::getUserId(), ':id' => $user['id']]);
 
         App::getLogger()->log('user_locked', ['locked_user'=>$email]);
 
@@ -670,22 +678,50 @@ class AdminController
     }
 
     /**
-     * A new link to '/' for an existing account; never touches groups or
-     * rights (DFM-08, D22). Refusals for locked accounts and the
-     * session_version increment come with Phase 10 Step 4.
+     * Clear a lock. No credentials are issued: the account stays unusable
+     * until a resend gives its owner a link to set a password.
+     */
+    private static function unlockUser($config, PDO $db)
+    {
+        header('Content-Type: application/json');
+        $email = trim(is_string($_POST['email'] ?? null) ? $_POST['email'] : '');
+
+        $stmt = $db->prepare("UPDATE users SET locked_at = NULL, locked_by = NULL
+                              WHERE username = :u AND deleted_at IS NULL AND locked_at IS NOT NULL");
+        $stmt->execute([':u' => $email]);
+        if ($stmt->rowCount() !== 1) {
+            echo json_encode(['success' => false, 'message' => 'No locked account with this address.']);
+            return;
+        }
+
+        App::getLogger()->log('user_unlocked', ['target_user' => $email]);
+        echo json_encode(['success' => true, 'message' => 'Account unlocked. Resend the invitation so that its owner can set a password.']);
+    }
+
+    /**
+     * A new link to '/' for an existing account (DFM-08, D22); never touches
+     * groups or rights. The link sets a new password (D24): this is also how
+     * an administrator resets a forgotten one. The account's open sessions
+     * end now. Refused for locked (unlock first) and deleted accounts.
      */
     private static function resendInvite($config, PDO $db)
     {
         header('Content-Type: application/json');
         $email = trim(is_string($_POST['email'] ?? null) ? $_POST['email'] : '');
 
-        $stmt = $db->prepare("SELECT id FROM users WHERE username = :u AND deleted_at IS NULL");
+        $stmt = $db->prepare("SELECT id, locked_at FROM users WHERE username = :u AND deleted_at IS NULL");
         $stmt->execute([':u' => $email]);
-        if ($stmt->fetchColumn() === false) {
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$user) {
             echo json_encode(['success' => false, 'message' => 'User not found.']);
             return;
         }
+        if ($user['locked_at'] !== null) {
+            echo json_encode(['success' => false, 'message' => 'This account is locked: unlock it first.']);
+            return;
+        }
 
+        $db->prepare("UPDATE users SET session_version = session_version + 1 WHERE id = :id")->execute([':id' => $user['id']]);
         $delivery = self::deliverInvitation($config, $db, $email, '/');
         App::getLogger()->log('invitation_resent', [
             'target_user' => $email,

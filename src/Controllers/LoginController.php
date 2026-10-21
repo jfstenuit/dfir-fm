@@ -63,7 +63,7 @@ class LoginController
     private static function checkInvitation(PDO $db, string $email, string $token): array
     {
         $stmt = $db->prepare("SELECT id AS user_id, username, invitation_token, token_expiry, session_version
-                              FROM users WHERE username = :email AND deleted_at IS NULL");
+                              FROM users WHERE username = :email AND deleted_at IS NULL AND locked_at IS NULL");
         $stmt->execute([':email' => $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -135,7 +135,7 @@ class LoginController
 
         $stmt = $db->prepare("UPDATE users SET password = :password, invitation_token = NULL, token_expiry = NULL,
                                                session_version = session_version + 1
-                              WHERE id = :id AND invitation_token = :token AND deleted_at IS NULL");
+                              WHERE id = :id AND invitation_token = :token AND deleted_at IS NULL AND locked_at IS NULL");
         $stmt->execute([':password' => password_hash($password, PASSWORD_DEFAULT), ':id' => $user['user_id'], ':token' => $user['invitation_token']]);
         if ($stmt->rowCount() !== 1) {
             // Another request used the token between the check and the update
@@ -240,7 +240,7 @@ class LoginController
             return;
         }
 
-        $stmt = $db->prepare("SELECT id as user_id, password, username, session_version FROM users WHERE username = :username AND deleted_at IS NULL");
+        $stmt = $db->prepare("SELECT id as user_id, password, username, session_version FROM users WHERE username = :username AND deleted_at IS NULL AND locked_at IS NULL");
         $stmt->bindParam(':username', $username, PDO::PARAM_STR);
         $stmt->execute();
         $user = $stmt->fetch(PDO::FETCH_ASSOC);

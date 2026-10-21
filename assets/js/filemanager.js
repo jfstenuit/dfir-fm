@@ -2,7 +2,7 @@
 // access rights, invitations, password change
 
 import Dropzone from '../../vendor/enyo/dropzone/dist/dropzone.mjs';
-import { api, h, icon, on, hideModal, showResultMessage, updatePassword, groupAutocomplete } from './utils.js';
+import { api, h, icon, on, hideModal, showResultMessage, updatePassword, groupAutocomplete, copyField } from './utils.js';
 import { sortableTable } from './sortable-table.js';
 
 const byId = id => document.getElementById(id);
@@ -28,7 +28,7 @@ export function init() {
     // The dialogs' buttons submit their forms: Enter in a field does the same
     byId('newFolderForm')?.addEventListener('submit', createFolder);
     byId('inviteForm')?.addEventListener('submit', sendInvite);
-    byId('copyInviteLink')?.addEventListener('click', copyInviteLink);
+    byId('copyInviteLink')?.addEventListener('click', event => copyField(byId('inviteLink'), event.currentTarget));
     // A manual invitation link is shown once: gone when the dialog closes
     byId('inviteModal')?.addEventListener('hidden.bs.modal', () => showInviteLink(null));
     byId('profileForm')?.addEventListener('submit', event => {
@@ -165,21 +165,6 @@ function showInviteLink(link) {
     input.value = link ?? '';
     byId('inviteLinkResult').classList.toggle('d-none', !link);
     if (link) input.select();
-}
-
-/** Feedback stays in the dialog: the result dialog can't open over it */
-async function copyInviteLink() {
-    const input = byId('inviteLink');
-    const button = byId('copyInviteLink');
-    try {
-        await navigator.clipboard.writeText(input.value);
-        button.replaceChildren(icon('check-lg'), ' Copied');
-    } catch {
-        // No clipboard access (plain http, permission): the link is selected for Ctrl+C
-        input.select();
-        button.replaceChildren(icon('clipboard'), ' Press Ctrl+C');
-    }
-    setTimeout(() => button.replaceChildren(icon('clipboard'), ' Copy'), 2000);
 }
 
 // ---------------------------------------------------------------------------

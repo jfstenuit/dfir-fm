@@ -75,7 +75,9 @@ class Database
     token_expiry DATETIME,
     deleted_at DATETIME,
     deleted_by INTEGER,
-    session_version INTEGER NOT NULL DEFAULT 0
+    session_version INTEGER NOT NULL DEFAULT 0,
+    locked_at DATETIME,
+    locked_by INTEGER
             );",
 
             "CREATE TABLE IF NOT EXISTS groups (
@@ -216,6 +218,43 @@ class Database
 
         if ($version < 5) {
             self::migrateToV5();
+        }
+
+        if ($version < 6) {
+            self::migrateToV6();
+        }
+    }
+
+    /**
+     * v6: users.locked_at / locked_by. A lock used to be recorded only as
+     * password '!' with token_expiry 0, which can't be told from an invitee
+     * whose link expired unused; those accounts get locked_at = now (UTC),
+     * locked_by unknown. Resend is refused while locked; Unlock clears it.
+     */
+    private static function migrateToV6()
+    {
+        $db = self::$connection;
+        $db->exec("BEGIN IMMEDIATE");
+        try {
+            if ((int)$db->query("PRAGMA user_version")->fetchColumn() >= 6) {
+                $db->exec("COMMIT"); // another request migrated meanwhile
+                return;
+            }
+            if (!self::hasColumn('users', 'locked_at')) {
+                $db->exec("ALTER TABLE users ADD COLUMN locked_at DATETIME");
+                $db->exec("ALTER TABLE users ADD COLUMN locked_by INTEGER");
+            }
+            $locked = $db->exec("UPDATE users SET locked_at = '" . gmdate('Y-m-d H:i:s') . "', invitation_token = NULL
+                                 WHERE deleted_at IS NULL AND locked_at IS NULL AND password = '!'
+                                   AND (token_expiry = 0 OR token_expiry = '0')");
+            if ($locked > 0) {
+                error_log("DFIR FM migration v6: $locked locked account(s) marked with locked_at");
+            }
+            $db->exec("PRAGMA user_version = 6");
+            $db->exec("COMMIT");
+        } catch (\Throwable $e) {
+            $db->exec("ROLLBACK");
+            throw $e;
         }
     }
 

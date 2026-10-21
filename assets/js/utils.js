@@ -151,6 +151,22 @@ export async function updatePassword() {
 }
 
 /**
+ * Copy an input's value, with the feedback on the button itself (a result
+ * dialog can't open over the dialog holding the input). Without clipboard
+ * access (plain http, permission), the value is selected for Ctrl+C.
+ */
+export async function copyField(input, button) {
+    try {
+        await navigator.clipboard.writeText(input.value);
+        button.replaceChildren(icon('check-lg'), ' Copied');
+    } catch {
+        input.select();
+        button.replaceChildren(icon('clipboard'), ' Press Ctrl+C');
+    }
+    setTimeout(() => button.replaceChildren(icon('clipboard'), ' Copy'), 2000);
+}
+
+/**
  * Event delegation: call handler(event, matched) for events on root whose
  * target is inside an element matching selector (within root). Works for
  * rows added after the call.

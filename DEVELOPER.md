@@ -7,9 +7,10 @@ This document outlines the technical structure and internal workings of the DFIR
 The application uses a single entrypoint: `index.php`. It handles routing manually and initializes all required components (middleware, controller dispatch, view rendering).
 
 Command-line tools live in `bin/` and refuse to run outside the CLI SAPI:
-- `php bin/create-admin.php <username>`: creates an administrator (or resets an existing user's password and adds them to the admin group) and prints a random password once. This is how the first administrator is created; no default account exists. It's also the break-glass tool when every administrator is locked out: it needs shell access only, and no identity provider.
+- `php bin/create-admin.php <username>`: creates an administrator (or resets an existing user's password, lifts a lock, and adds them to the admin group) and prints a random password once. This is how the first administrator is created; no default account exists. It's also the break-glass tool when every administrator is locked out: it needs shell access only, and no identity provider.
 - `php bin/send-test-mail.php <recipient>`: sends a test e-mail through the configured mail engine, exactly as invitations are sent. Exit code 0 when the engine accepted the message, 1 with the reason on stderr otherwise. With `mail_engine=none` it sends nothing, says so and exits 0. Run it as the web server user (e.g. `sudo -u www-data php bin/send-test-mail.php …`) to also check its permissions.
 - `php bin/check-integrity.php`: re-hashes every stored file and compares it with its `files` record (SHA-256 and size). Also reports `files` rows that share a name or a SHA-256 in one directory, rows that refer to a missing row (`PRAGMA foreign_key_check`), and, with the local storage engine, files in storage without a record. Read-only; exit code 0 when everything matches, 1 otherwise.
+- `php bin/report-domain-groups.php`: lists the `<domain> users` groups left by invitations made before default groups (DFM-01), with their members and the folders they have rights on, and flags those whose members share several folders. Review and split them from the admin page; the script changes nothing. Read-only; exit code 0, 2 on error.
 - `php bin/find-deleted-user.php <email>`: lists the deleted accounts of an e-mail address (see *Deleted accounts*), with their id, so that `files.uploaded_by`, `directories.created_by` and the log can be searched by id. Read-only; each lookup is logged with the hash of the address, not the address. Exit code 0 when an account was found, 1 otherwise.
 - `php bin/expire-uploads.php`: expires uploads without activity for `upload_stale_after` seconds and deletes their staging files. The application also does this whenever an upload starts; the script is for a cron job.
 
@@ -55,6 +56,7 @@ project-root/
 │   ├── send-test-mail.php     # Check the mail configuration
 │   ├── check-integrity.php    # Re-hash stored files against the database
 │   ├── find-deleted-user.php  # Deleted accounts of an e-mail address
+│   ├── report-domain-groups.php # Groups of older invitations, to review
 │   └── expire-uploads.php     # Expire abandoned uploads (cron)
 ├── .dockerignore              # Build context of the image: only what it needs
 ├── docker/                    # Container deployment (see "Docker")
@@ -217,7 +219,7 @@ The application now implements several layers of security to defend against comm
   One rule (`Core\PasswordPolicy`, D26) for the invitation form and the profile dialog: at least 12 characters, no complexity rule (accounts mostly live for the duration of an investigation). Passwords are never trimmed, neither when set nor at login. Setting a password never asks for the current one (D24): the session, or the invitation token, is the proof.
 
 - **Session Hijack Protection**  
-Session cookies are `HttpOnly`, `SameSite=Lax`, scoped to the application's base path, and `Secure` when the request is HTTPS (directly, `X-Forwarded-Proto` from a trusted proxy, or `force_https=true`). `Lax` rather than `Strict`: `Strict` drops the cookie on navigations coming from another site, which breaks invitation links opened from an e-mail and the planned OIDC callback. Cross-site POSTs remain blocked by `Lax` and the CSRF tokens. `session.use_strict_mode` rejects session IDs the server didn't issue, and the session ID is regenerated at login (session fixation). Sessions end after 1 hour without a request (hardcoded in `Session::isStillValid()`) and on logout. Revocation is immediate: on every request, `index.php` reads the session's account (`Session::revocationCause()`) and ends the session when the account no longer exists, is deleted, or its `session_version` differs from the one stored at login. Locking or deleting an account, a reset by `bin/create-admin.php` and a password change increment it; the session that changed its own password is kept. A revoked session is answered like an expired one (a redirect to `login`) and logged as `session_revoked`. PHP's own `session.gc_maxlifetime` (1440 s by default) can delete an idle session earlier; a configurable timeout is part of #16.
+Session cookies are `HttpOnly`, `SameSite=Lax`, scoped to the application's base path, and `Secure` when the request is HTTPS (directly, `X-Forwarded-Proto` from a trusted proxy, or `force_https=true`). `Lax` rather than `Strict`: `Strict` drops the cookie on navigations coming from another site, which breaks invitation links opened from an e-mail and the planned OIDC callback. Cross-site POSTs remain blocked by `Lax` and the CSRF tokens. `session.use_strict_mode` rejects session IDs the server didn't issue, and the session ID is regenerated at login (session fixation). Sessions end after 1 hour without a request (hardcoded in `Session::isStillValid()`) and on logout. Revocation is immediate: on every request, `index.php` reads the session's account (`Session::revocationCause()`) and ends the session when the account no longer exists, is deleted, or its `session_version` differs from the one stored at login. Locking or deleting an account, resending its invitation, a reset by `bin/create-admin.php` and a password change (profile or invitation link) increment it; the session that changed its own password is kept. A revoked session is answered like an expired one (a redirect to `login`) and logged as `session_revoked`. PHP's own `session.gc_maxlifetime` (1440 s by default) can delete an idle session earlier; a configurable timeout is part of #16.
 
 Future improvements may include:
 - Device/session management
@@ -236,7 +238,7 @@ The logger is globally available via `App::getLogger()` and all controller-level
 - Uploads: `upload_start`, `upload_verifying`, `upload_completed` (with size and SHA-256), `upload_name_conflict`, `upload_duplicate_refused`, `upload_denied`, `upload_chunk_rejected`, `upload_failed`, `upload_aborted`, `upload_expired`, `upload_verify_restarted`
 - Downloads: `download_success`, `download_partial`, `download_failure`
 - Folders and files: `directory_created`, `directory_deleted`, `file_deleted`, `filemanager_failure` (a missing folder requested)
-- Administration: `user_invited` (with `directory`, the `group` joined or null, `delivery`: `mail` or `manual`, and `invitation_sent`; the link itself is never logged), `invitation_resent` (same fields, without group), `user_locked`, `user_deleted` (with `target_user_id` and `pseudonym`), `group_created` (with `default_group_of` when an invitation created it), `group_deleted` (with the number of `members` it had), `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
+- Administration: `user_invited` (with `directory`, the `group` joined or null, `delivery`: `mail` or `manual`, and `invitation_sent`; the link itself is never logged), `invitation_resent` (same fields, without group), `user_locked`, `user_unlocked`, `user_deleted` (with `target_user_id` and `pseudonym`), `group_created` (with `default_group_of` when an invitation created it), `group_deleted` (with the number of `members` it had), `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
 - Mail failures: `mail_send_failure`
 - Command line: `cli_admin_created` (`bin/create-admin.php`, also when it resets a password), `cli_test_mail_sent` and `cli_deleted_user_lookup` (with `address_hash` and the account ids found), with `username` set to `cli:` + the system user; `upload_expired` from `bin/expire-uploads.php`, without a username
 
@@ -264,12 +266,13 @@ Access rights :
 ### 1. **User Management**
 | Feature | Description | Location |
 |--------|-------------|-------------|
-| 🧑 View Users | List all users, their groups and their status (active: a password or a valid invitation; otherwise locked) | Admin UI, Users tab |
+| 🧑 View Users | List all users, their groups and their status: Active (has a password), Invited (no password yet; the tooltip says whether the link is pending or expired), Locked | Admin UI, Users tab |
 | ➕ Create User | Not available: a contributor is created by inviting them. Administrators are created with `bin/create-admin.php` | — |
 | ✉️ Invite User | Into the current folder, never the root (D14; the Invite link is hidden there). Creates the account if needed and, unless "Add to the default group of this folder" is unticked, adds it to that folder's default group (created with upload access if missing). Always delivers a link to a page where the invitee sets their password (single use, one hour): by e-mail, or with `mail_engine=none` shown once in the dialog, with a Copy button, to pass on through another channel | File Manager UI (admins), Invite dialog |
-| 🔁 Resend Invitation | A new link, to `/`; never touches groups or rights. With `mail_engine=none` the link is in the answer (shown in the admin page from Phase 10 Step 4) | Admin UI, Users tab |
+| 🔁 Resend Invitation | After a confirmation: a new link, to `/` (group memberships lead the user to their folders); never touches groups or rights. The previous link stops working and the account's open sessions end at once. The link sets a new password, so this is also how an administrator resets a forgotten one. With `mail_engine=none` the link is shown once in a dialog with a Copy button. Refused for locked accounts | Admin UI, Users tab |
 | 👥 Group memberships | Add or remove a user's groups | Admin UI, Users tab |
-| 🔒 Lock User | Makes the password and any pending invitation unusable | Admin UI, Users tab |
+| 🔒 Lock User | Removes the password and any pending invitation, ends open sessions, and records `locked_at`: the account can't be re-invited until unlocked | Admin UI, Users tab |
+| 🔓 Unlock User | Clears the lock without issuing credentials; resend the invitation for the owner to set a password | Admin UI, Users tab |
 | 🗑️ Delete User | Disables the account for good and replaces its address by a pseudonym (see *Deleted accounts*). Its files, folders and log entries are kept | Admin UI, Users tab |
 
 Changing a user's name or e-mail address isn't available. There is no invitation form in the admin page (D22): invitations are made from the folder they are for.
@@ -334,6 +337,7 @@ Database initialization is handled programmatically in `src/Core/Database.php`.
 - **v4:** repairs the rows the foreign keys would refuse. Ids of accounts deleted before v3, still referenced by files, folders or uploads, get a deleted account named `deleted:unknown:<id>`. Memberships of missing or deleted accounts and of missing groups, access rights of missing groups or folders, uploads into missing folders and chunks of missing uploads are deleted. Files and folders whose folder is missing are kept (evidence records) and listed as "to review". Every change is reported in the PHP error log.
 
 - **v5:** adds `users.session_version` (immediate revocation of sessions). Sessions opened before v5 match the default 0 and stay valid.
+- **v6:** adds `users.locked_at` / `locked_by`. A lock used to be recorded only as `password = '!'` with `token_expiry = 0`, which can't be told from an invitee whose link expired unused; those accounts get `locked_at` (the migration time, UTC) and lose any leftover token.
 
 To add a migration, add a `if ($version < N)` block in `migrate()` that ends with `PRAGMA user_version = N`. Back up the database file (`database_path`, by default `storage/database/app.sqlite`) before upgrading.
 
@@ -364,7 +368,9 @@ CREATE TABLE users (
     token_expiry DATETIME,
     deleted_at DATETIME,         -- soft deletion (see Deleted accounts)
     deleted_by INTEGER,
-    session_version INTEGER NOT NULL DEFAULT 0  -- incremented to end the account's sessions
+    session_version INTEGER NOT NULL DEFAULT 0, -- incremented to end the account's sessions
+    locked_at DATETIME,             -- UTC; set by Lock, cleared by Unlock
+    locked_by INTEGER
 );
 CREATE TABLE IF NOT EXISTS 'groups' (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

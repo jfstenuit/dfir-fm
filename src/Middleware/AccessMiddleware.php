@@ -220,7 +220,7 @@ class AccessMiddleware
             FROM users u
             JOIN user_group ug ON ug.user_id = u.id
             JOIN groups g ON g.id = ug.group_id
-            WHERE g.is_admin = 1 AND u.password <> '!' AND u.id <> :exclude
+            WHERE g.is_admin = 1 AND u.password <> '!' AND u.locked_at IS NULL AND u.deleted_at IS NULL AND u.id <> :exclude
         ");
         $stmt->bindValue(':exclude', $excludeUserId ?? 0, PDO::PARAM_INT);
         $stmt->execute();

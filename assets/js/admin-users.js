@@ -2,7 +2,7 @@
 //
 // Invitations are made from a folder of the file manager (D22).
 
-import { api, h, icon, on, hideModal, showModal, showResultMessage, groupAutocomplete } from './utils.js';
+import { api, h, icon, on, hideModal, showModal, showResultMessage, groupAutocomplete, copyField } from './utils.js';
 
 const byId = id => document.getElementById(id);
 let bound = false;
@@ -16,6 +16,10 @@ export function init() {
 
     on('#usersTable', 'click', '.resend-invite', (event, button) => resendInvite(userOf(button)));
     on('#usersTable', 'click', '.lock-user', (event, button) => lockUser(userOf(button)));
+    on('#usersTable', 'click', '.unlock-user', (event, button) => unlockUser(userOf(button)));
+    byId('copyInvitationLink')?.addEventListener('click', event => copyField(byId('invitationLink'), event.currentTarget));
+    // A manual invitation link is shown once: gone when the dialog closes
+    byId('invitationLinkModal')?.addEventListener('hidden.bs.modal', () => { byId('invitationLink').value = ''; });
     on('#usersTable', 'click', '.delete-user', (event, button) => deleteUser(userOf(button)));
     on('#usersTable', 'click', '.add-group', (event, button) => openAddToGroup(userOf(button)));
     on('#usersTable', 'click', '.remove-group', (event, button) =>
@@ -39,8 +43,18 @@ async function loadUserTable() {
     }
 }
 
+const STATUS = {
+    active: { label: 'Active', badge: 'text-bg-success', title: 'Has a password' },
+    invited: { label: 'Invited', badge: 'text-bg-info', title: 'No password yet' },
+    locked: { label: 'Locked', badge: 'text-bg-secondary', title: 'Locked by an administrator: unlock, then resend the invitation' },
+};
+
 function userRow(user) {
-    const active = user.status === 'active';
+    const status = STATUS[user.status] ?? STATUS.invited;
+    const locked = user.status === 'locked';
+    const title = user.status === 'invited'
+        ? (user.invitation_pending ? 'Invitation link pending (valid one hour)' : 'Invitation link expired or used: resend it')
+        : status.title;
     const groupBadge = group => h('span', { class: 'badge text-bg-primary me-1', dataset: { group } },
         group,
         h('button', { type: 'button', class: 'badge-action remove-group', title: 'Remove from group',
@@ -53,13 +67,13 @@ function userRow(user) {
             h('button', { type: 'button', class: 'badge text-bg-secondary border-0 add-group', title: 'Add to a group',
                           'aria-label': `Add ${user.email} to a group` }, icon('plus-lg'))),
         h('td', { class: 'status text-center' },
-            h('span', { class: `badge ${active ? 'text-bg-success' : 'text-bg-secondary'}`,
-                        title: active ? 'User has a password or valid token' : 'User has no valid credentials' },
-                active ? 'Active' : 'Locked')),
+            h('span', { class: `badge ${status.badge}`, title }, status.label)),
         h('td', { class: 'actions text-center' },
-            h('button', { type: 'button', class: 'btn btn-sm btn-link resend-invite', title: 'Re-send invitation email' }, icon('envelope-open')),
-            h('button', { type: 'button', class: 'btn btn-sm btn-link lock-user', disabled: !active,
-                          title: active ? 'Lock this user' : 'This user is already locked' }, icon('lock')),
+            locked
+                ? h('button', { type: 'button', class: 'btn btn-sm btn-link unlock-user', title: 'Unlock this user (no credentials are issued: resend the invitation afterwards)' }, icon('unlock'))
+                : [h('button', { type: 'button', class: 'btn btn-sm btn-link resend-invite',
+                                 title: 'Send a new invitation link: the user sets a new password with it (also a password reset); their open sessions end' }, icon('envelope-open')),
+                   h('button', { type: 'button', class: 'btn btn-sm btn-link lock-user', title: 'Lock this user' }, icon('lock'))],
             h('button', { type: 'button', class: 'btn btn-sm btn-link text-danger delete-user', title: 'Delete user' }, icon('trash'))));
 }
 
@@ -79,8 +93,33 @@ async function act(fields, done, { reload = true } = {}) {
     }
 }
 
-function resendInvite(email) {
-    act({ a: 'resendInvite', email }, 'Invitation resent.', { reload: false });
+/**
+ * A new link to "/" (D22). Mail: a message. mail_engine=none: the link, shown
+ * once in a dialog. The account's open sessions end now.
+ */
+async function resendInvite(email) {
+    if (!confirm(`Send a new invitation to ${email}?\n\nThe link lets them set a new password (it also serves as a password reset). `
+                 + 'Their open sessions end now; groups and rights are unchanged.')) {
+        return;
+    }
+    try {
+        const response = await api('admin', { data: { a: 'resendInvite', email } });
+        if (response?.link) {
+            byId('invitationLinkUser').textContent = email;
+            byId('invitationLink').value = response.link;
+            byId('invitationLinkModal').addEventListener('shown.bs.modal', () => byId('invitationLink').select(), { once: true });
+            showModal('#invitationLinkModal');
+        } else {
+            showResultMessage(response?.message || 'Invitation resent.', true);
+        }
+        loadUserTable();
+    } catch (error) {
+        showResultMessage(error.message, false);
+    }
+}
+
+function unlockUser(email) {
+    act({ a: 'unlockUser', email }, 'User unlocked.');
 }
 
 function lockUser(email) {
