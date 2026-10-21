@@ -592,7 +592,31 @@ The largest file is set by `upload_max_size`, not by these limits.
 - **Code:** owned by root and read-only for `www-data`, who only writes to `/data`. Dependencies are installed with `composer install --no-dev`. The image adds the `apcu` (pecl) and `gmp` (required by `sendgrid/sendgrid`) extensions.
 - **First administrator:** `docker compose exec -u www-data app php bin/create-admin.php you@yourdomain.com`.
 - **Workers:** `docker/php-fpm.conf` sets `pm.max_children = 20` (the base image's 5 is used up by a few concurrent downloads). Each download, each upload verification and each request in progress holds a worker for its duration: size it for concurrent downloads + concurrent verifications + a few for pages and status polls. An idle worker uses ~20–40 MB. `request_terminate_timeout` stays 0: verifying a large disk image takes longer than any fixed limit, and a killed verification restarts from zero.
-- **HTTP only:** the compose file publishes the port (`http_port`, default 8080) on 127.0.0.1. Put a TLS-terminating reverse proxy in front and set `trusted_proxies` (and `force_https` if needed). A proxy on the host (e.g. `cloudflared` pointed at `http://localhost:7080`) reaches the container through Docker's port publishing, so the application sees the gateway of the Compose network (e.g. `172.21.0.1`), not `127.0.0.1`: list Docker's default range, `172.16.0.0/12`, rather than `127.0.0.1, ::1`.
+- **HTTP only:** the compose file publishes the port (`http_port`, default 8080) on 127.0.0.1. Put a TLS-terminating reverse proxy in front and set `trusted_proxies` (and `force_https` if needed). A proxy on the host (e.g. `cloudflared` pointed at `http://localhost:7080`) reaches the container through Docker's port publishing, so the application sees the gateway of the Compose network (e.g. `172.21.0.1`), not `127.0.0.1`: list Docker's default range, `172.16.0.0/12`, rather than `127.0.0.1, ::1`. For Cloudflare Tunnel, see the checklist below.
+
+### Behind Cloudflare Tunnel
+
+A checklist for publishing the container through `cloudflared` (from `CODE_AUDIT.md`, section 7). The application handles a proxy correctly, but several defaults are only right for a direct connection.
+
+**Application (`docker/.env`)**
+- [ ] **`trusted_proxies`**: the address `cloudflared` connects from, *as the container sees it*, and nothing wider. With `cloudflared` on the host, through the published port: the gateway of the Compose network (`docker network inspect docker_default -f '{{(index .IPAM.Config 0).Gateway}}'`, e.g. `172.21.0.1`; the network is named after the compose file's directory, `docker`, unless `COMPOSE_PROJECT_NAME` says otherwise). With `cloudflared` as a container on the same network: that container's address. `172.16.0.0/12` works too, but then any container on a Docker network could set its own `X-Forwarded-For`. Check: the admin page shows no "Proxy not configured" warning, and the log's `ip` fields hold the clients' addresses, not the gateway's. Left empty, every client appears as the gateway: one person's failed logins lock everyone out, and `uploaded_from` records the gateway.
+- [ ] **`force_https=true`**: TLS ends at Cloudflare, `cloudflared` talks plain HTTP to the container. A trusted `cloudflared` sends `X-Forwarded-Proto: https`, which is enough, but `force_https` doesn't depend on it. Check: `curl -sI https://host/login | grep -i set-cookie` shows `secure`, and invitation links start with `https://`.
+- [ ] **Disk space (D16)**: there is no upload size limit by default (`upload_max_size` empty). A file larger than the free space is refused before it is sent, but nothing stops the disk from filling up file after file: monitor the free space of the files directory or volume, and set `upload_max_size` if this deployment needs a limit. Abandoned uploads keep their partial data for `upload_stale_after` (one day by default).
+- [ ] **PHP-FPM workers**: see *Workers* above. 20 by default; raise `pm.max_children` in `docker/php-fpm.conf` (and rebuild) for more concurrent downloads or verifications.
+
+**Cloudflare (dashboard)**
+- [ ] **Cloudflare Access** on at least `/admin`, better on the whole hostname: authentication, MFA and device checks before the login form. Protecting the whole hostname means that invitees must also pass the Access policy (e.g. a policy allowing their e-mail addresses with one-time PINs), or their invitation links are blocked.
+- [ ] **Cache rule**: bypass the cache for the whole hostname. The application sends `Cache-Control: no-store` on every page and answer, and `private, no-store` on downloads, but a "Cache Everything" rule or an Edge TTL override would still store authenticated pages and evidence at the edge.
+- [ ] **HSTS** at the edge (SSL/TLS → Edge Certificates: HSTS, Always Use HTTPS): the application doesn't send `Strict-Transport-Security` itself, since it can't know whether it is only served over HTTPS.
+- [ ] **Rate limiting rules**: on `POST /login` (e.g. 20 requests per minute per IP; the application has its own limits, per IP and per username, which this complements), and on `/upload` with a threshold above what a legitimate upload needs: one request per 2 MiB chunk, so about 6 per second on a 100 Mbit/s uplink (360 per minute), plus one status poll per second per file being verified.
+- [ ] **WAF and Bot Fight Mode**: check that they don't challenge the application's `fetch` requests (chunk uploads, status polls): a challenge answers HTML instead of JSON, which the upload dialog reports as an error.
+- [ ] **Limits of the plan**: the request body limit (100 MB on Free and Pro) is far above the 2 MiB chunks. The 100-second origin timeout (time to the first byte of the answer) cuts a `complete` request whose verification takes longer (`524`): the client treats this as a cut request and the status polls deliver the outcome, while the verification goes on in the container. Downloads send their headers at once, so they aren't affected.
+
+**Host**
+- [ ] The container's port published on `127.0.0.1` only (the compose file's default), so that only `cloudflared` reaches it.
+- [ ] `docker/.env` mode `640`, readable by the container's `www-data` (see *Configuration*).
+- [ ] The database volume backed up; never `docker compose down -v` on a production host.
+- [ ] Audit events kept outside the container (`log_dir`, or `log_engine=stderr` with a Docker logging driver pointed at the SIEM), and the first administrator created with `bin/create-admin.php`, its password changed at first login.
 
 ## Backend Extensibility
 

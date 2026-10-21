@@ -50,6 +50,12 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
      sudo chgrp www-data .env && chmod 640 .env
      ```
    - Edit the `.env` file to configure your settings (mail, storage directory, database and log paths, reverse proxy). The storage directory must exist; it and the directories of the database and the log file must be writable by the web server user and not web-accessible.
+   - Check that the web server refuses `.env` (and the rest of the application's files): `.htaccess` blocks them, but only if Apache reads it (`AllowOverride All` for the application's directory, and `mod_rewrite` enabled):
+     ```bash
+     curl -s -o /dev/null -w '%{http_code}\n' https://your.host/dfir-fm/.env   # 404 (or 403) expected
+     curl -s -o /dev/null -w '%{http_code}\n' https://your.host/dfir-fm/src/Core/Config.php   # 404 expected
+     ```
+     A `200` means that the configuration, secrets included, is readable by anyone. If `.htaccess` can't be enabled, block these paths in the virtual host, or, with PHP-FPM, move the settings out of the web root: every key can be set as a `DFIRFM_` variable in the pool configuration (`env[DFIRFM_SMTP_PASSWORD] = …`), and `.env` can then be deleted. Apache's `SetEnv` doesn't work for this with mod_php.
    - Allow PHP requests of a few MiB: uploads arrive in chunks of 2 MiB. Set `upload_max_filesize` and `post_max_size` to e.g. `8M` (PHP's default `upload_max_filesize=2M` is too small), and raise any body size limit of a reverse proxy (nginx: `client_max_body_size`).
    - Check that invitation e-mails can be sent:
      ```bash
