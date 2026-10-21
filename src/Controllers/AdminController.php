@@ -520,7 +520,7 @@ class AdminController
         $pseudonym = AccessMiddleware::deletedPseudonym($user['email'] ?: $user['username'], (int)$user['id']);
         $db->beginTransaction();
         $stmt = $db->prepare("UPDATE users SET username = :pseudonym, email = :pseudonym, password = '!',
-                                     invitation_token = NULL, token_expiry = NULL,
+                                     invitation_token = NULL, token_expiry = NULL, session_version = session_version + 1,
                                      deleted_at = :now, deleted_by = :by
                               WHERE id = :id");
         $stmt->execute([':pseudonym' => $pseudonym, ':now' => gmdate('Y-m-d H:i:s'), ':by' => Session::getUserId(), ':id' => $user['id']]);
@@ -673,7 +673,7 @@ class AdminController
         }
 
         // Lock the user
-        $stmt = $db->prepare("UPDATE users SET password = '!', token_expiry = 0 WHERE id = :id");
+        $stmt = $db->prepare("UPDATE users SET password = '!', token_expiry = 0, session_version = session_version + 1 WHERE id = :id");
         $success = $stmt->execute([':id' => $user['id']]);
 
         App::getLogger()->log('user_locked', ['locked_user'=>$email]);

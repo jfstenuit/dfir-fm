@@ -208,7 +208,7 @@ The application now implements several layers of security to defend against comm
   `GET /dl` checks the read right on the file's folder for every request. `Response::contentDisposition()` builds the `Content-Disposition` header: an ASCII fallback `filename` with quotes, backslashes, `%`, `;` and control characters replaced, plus the exact name in `filename*=UTF-8''…` (RFC 6266). A single `Range` (`bytes=a-b`, `a-`, `-n`) gets a `206`, an unsatisfiable one a `416`; multiple ranges get the whole file. Logged as `download_success`, `download_partial` or `download_failure`.
 
 - **Session Hijack Protection**  
-Session cookies are `HttpOnly`, `SameSite=Lax`, scoped to the application's base path, and `Secure` when the request is HTTPS (directly, `X-Forwarded-Proto` from a trusted proxy, or `force_https=true`). `Lax` rather than `Strict`: `Strict` drops the cookie on navigations coming from another site, which breaks invitation links opened from an e-mail and the planned OIDC callback. Cross-site POSTs remain blocked by `Lax` and the CSRF tokens. `session.use_strict_mode` rejects session IDs the server didn't issue, and the session ID is regenerated at login (session fixation). Sessions end after 1 hour without a request (hardcoded in `Session::isStillValid()`) and on logout. PHP's own `session.gc_maxlifetime` (1440 s by default) can delete an idle session earlier; a configurable timeout is part of #16.
+Session cookies are `HttpOnly`, `SameSite=Lax`, scoped to the application's base path, and `Secure` when the request is HTTPS (directly, `X-Forwarded-Proto` from a trusted proxy, or `force_https=true`). `Lax` rather than `Strict`: `Strict` drops the cookie on navigations coming from another site, which breaks invitation links opened from an e-mail and the planned OIDC callback. Cross-site POSTs remain blocked by `Lax` and the CSRF tokens. `session.use_strict_mode` rejects session IDs the server didn't issue, and the session ID is regenerated at login (session fixation). Sessions end after 1 hour without a request (hardcoded in `Session::isStillValid()`) and on logout. Revocation is immediate: on every request, `index.php` reads the session's account (`Session::revocationCause()`) and ends the session when the account no longer exists, is deleted, or its `session_version` differs from the one stored at login. Locking or deleting an account, a reset by `bin/create-admin.php` and a password change increment it; the session that changed its own password is kept. A revoked session is answered like an expired one (a redirect to `login`) and logged as `session_revoked`. PHP's own `session.gc_maxlifetime` (1440 s by default) can delete an idle session earlier; a configurable timeout is part of #16.
 
 Future improvements may include:
 - Device/session management
@@ -223,7 +223,7 @@ Log engines are configured via `.env` using the `log_engine` key.
 
 The logger is globally available via `App::getLogger()` and all controller-level events are expected to log security-sensitive actions. Every record carries `ts` (UTC), `action` (the event), `username`, the client `ip` (and `peer_ip`, see *Client IP resolution*), plus the event's own fields. Events logged today:
 
-- Login and logout: `login_password_success`, `login_password_failure`, `login_token_success`, `login_token_failure`, `logout`
+- Login and logout: `login_password_success`, `login_password_failure`, `login_token_success`, `login_token_failure`, `logout`, `session_revoked` (with `cause`: `deleted`, `missing`, or `revoked` for a lock or a password change)
 - Uploads: `upload_start`, `upload_verifying`, `upload_completed` (with size and SHA-256), `upload_name_conflict`, `upload_duplicate_refused`, `upload_denied`, `upload_chunk_rejected`, `upload_failed`, `upload_aborted`, `upload_expired`, `upload_verify_restarted`
 - Downloads: `download_success`, `download_partial`, `download_failure`
 - Folders and files: `directory_created`, `directory_deleted`, `file_deleted`, `filemanager_failure` (a missing folder requested)
@@ -325,6 +325,8 @@ Database initialization is handled programmatically in `src/Core/Database.php`.
 - **v3:** adds `users.deleted_at` and `users.deleted_by` (soft deletion of accounts). Existing accounts stay active.
 - **v4:** repairs the rows the foreign keys would refuse. Ids of accounts deleted before v3, still referenced by files, folders or uploads, get a deleted account named `deleted:unknown:<id>`. Memberships of missing or deleted accounts and of missing groups, access rights of missing groups or folders, uploads into missing folders and chunks of missing uploads are deleted. Files and folders whose folder is missing are kept (evidence records) and listed as "to review". Every change is reported in the PHP error log.
 
+- **v5:** adds `users.session_version` (immediate revocation of sessions). Sessions opened before v5 match the default 0 and stay valid.
+
 To add a migration, add a `if ($version < N)` block in `migrate()` that ends with `PRAGMA user_version = N`. Back up the database file (`database_path`, by default `storage/database/app.sqlite`) before upgrading.
 
 No user is seeded. A fresh install has an empty admin group: create the first administrator with `bin/create-admin.php`.
@@ -353,7 +355,8 @@ CREATE TABLE users (
     invitation_token TEXT,
     token_expiry DATETIME,
     deleted_at DATETIME,         -- soft deletion (see Deleted accounts)
-    deleted_by INTEGER
+    deleted_by INTEGER,
+    session_version INTEGER NOT NULL DEFAULT 0  -- incremented to end the account's sessions
 );
 CREATE TABLE IF NOT EXISTS 'groups' (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -575,7 +578,7 @@ Each backend is responsible for parsing its configuration from the `.env` file.
 
 - Database migrations are minimal (`PRAGMA user_version` steps in `Database::migrate()`), with no down-migrations
 - Only the local storage engine exists (Azure Blob and S3: #6, #7)
-- Session idle timeout hardcoded to 1 hour; no absolute lifetime; locking or deleting a user doesn't end their open sessions (#16)
+- Session idle timeout hardcoded to 1 hour; no absolute lifetime (#16)
 - Password changes aren't logged, and the profile dialog doesn't ask for the current password
 - No forgotten-password reset (#1); the Logs tab of the admin page is empty (#23)
 - Login rate-limit counters are per server (APCu)

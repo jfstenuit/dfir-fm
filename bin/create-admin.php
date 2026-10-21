@@ -62,7 +62,8 @@ $stmt->execute([':username' => $username]);
 $userId = $stmt->fetchColumn();
 
 if ($userId) {
-    $stmt = $db->prepare("UPDATE users SET password = :password, invitation_token = NULL, token_expiry = NULL WHERE id = :id");
+    // A reset ends the account's open sessions
+    $stmt = $db->prepare("UPDATE users SET password = :password, invitation_token = NULL, token_expiry = NULL, session_version = session_version + 1 WHERE id = :id");
     $stmt->execute([':password' => $hash, ':id' => $userId]);
     $created = false;
 } else {

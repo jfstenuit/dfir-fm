@@ -70,9 +70,16 @@ if (strpos($requestUri, $scriptName) === 0) {
 // Normalize the request URI
 $requestUri = '/' . trim($requestUri, '/');
 
-// Authentication check
+// Authentication check. A session whose account was locked, deleted or
+// had its password changed elsewhere ends at once, answered as an expired
+// session (the JS clients treat a redirect to login as one).
 if ($requestUri !== '/login') {
-    if (!Session::isAuthenticated() || !Session::isStillValid()) {
+    $revoked = Session::isAuthenticated() ? Session::revocationCause($db) : null;
+    if ($revoked !== null) {
+        App::getLogger()->log('session_revoked', ['cause' => $revoked]);
+        Session::logout();
+    }
+    if ($revoked !== null || !Session::isAuthenticated() || !Session::isStillValid()) {
         $currentUrl = $_SERVER['REQUEST_URI'];
         header('Location: login?redirect=' . urlencode($currentUrl));
         exit;

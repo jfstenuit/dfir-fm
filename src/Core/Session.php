@@ -58,7 +58,39 @@ class Session
 
         $_SESSION['user_id'] = $user['user_id'];
         $_SESSION['username'] = $user['username'];
+        $_SESSION['session_version'] = (int)($user['session_version'] ?? 0);
         $_SESSION['last_activity'] = time();
+    }
+
+    /**
+     * Why the session's account may no longer use it, or null if it may:
+     * 'missing' (no users row), 'deleted', or 'revoked' (users.session_version
+     * changed since login: locked, password changed or reset). Read on
+     * every request, so that revocation is immediate.
+     */
+    public static function revocationCause(\PDO $db): ?string
+    {
+        $stmt = $db->prepare("SELECT deleted_at, session_version FROM users WHERE id = :id");
+        $stmt->execute([':id' => self::getUserId()]);
+        $user = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        if (!$user) {
+            return 'missing';
+        }
+        if ($user['deleted_at'] !== null) {
+            return 'deleted';
+        }
+        // Sessions opened before v5 have no version: they match the default 0
+        if ((int)$user['session_version'] !== (int)($_SESSION['session_version'] ?? 0)) {
+            return 'revoked';
+        }
+        return null;
+    }
+
+    /** After a change that ends the account's other sessions (see revocationCause) */
+    public static function setVersion(int $version): void
+    {
+        $_SESSION['session_version'] = $version;
     }
 
     public static function getUserId(): ?int

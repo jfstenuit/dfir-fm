@@ -74,7 +74,8 @@ class Database
     invitation_token TEXT,
     token_expiry DATETIME,
     deleted_at DATETIME,
-    deleted_by INTEGER
+    deleted_by INTEGER,
+    session_version INTEGER NOT NULL DEFAULT 0
             );",
 
             "CREATE TABLE IF NOT EXISTS groups (
@@ -211,6 +212,34 @@ class Database
 
         if ($version < 4) {
             self::migrateToV4();
+        }
+
+        if ($version < 5) {
+            self::migrateToV5();
+        }
+    }
+
+    /**
+     * v5: users.session_version, incremented when an account's open
+     * sessions must end (lock, deletion, password change or reset)
+     */
+    private static function migrateToV5()
+    {
+        $db = self::$connection;
+        $db->exec("BEGIN IMMEDIATE");
+        try {
+            if ((int)$db->query("PRAGMA user_version")->fetchColumn() >= 5) {
+                $db->exec("COMMIT"); // another request migrated meanwhile
+                return;
+            }
+            if (!self::hasColumn('users', 'session_version')) {
+                $db->exec("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0");
+            }
+            $db->exec("PRAGMA user_version = 5");
+            $db->exec("COMMIT");
+        } catch (\Throwable $e) {
+            $db->exec("ROLLBACK");
+            throw $e;
         }
     }
 

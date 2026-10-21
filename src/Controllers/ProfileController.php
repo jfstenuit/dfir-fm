@@ -48,13 +48,18 @@ class ProfileController
     
         $newPasswordHash = password_hash($request['password'], PASSWORD_DEFAULT);
 
-        $stmt = $db->prepare("UPDATE users SET password = :password WHERE id = :id");
+        // Ends the account's other sessions; this one is kept
+        $stmt = $db->prepare("UPDATE users SET password = :password, session_version = session_version + 1 WHERE id = :id");
         $success = $stmt->execute([
             ':password' => $newPasswordHash,
             ':id' => $userId
         ]);
 
         if ($success) {
+            $stmt = $db->prepare("SELECT session_version FROM users WHERE id = :id");
+            $stmt->execute([':id' => $userId]);
+            Session::setVersion((int)$stmt->fetchColumn());
+
             echo json_encode(['success' => true, 'message' => 'Password updated.']);
         } else {
             error_log("Failed to update password for user ID $userId");

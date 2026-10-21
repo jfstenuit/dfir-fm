@@ -48,7 +48,7 @@ class LoginController
     {
         // Validate the token for the provided email
         $stmt = $db->prepare("
-            SELECT u.id AS user_id, u.username, u.invitation_token, u.token_expiry
+            SELECT u.id AS user_id, u.username, u.invitation_token, u.token_expiry, u.session_version
             FROM users u
             WHERE u.username = :email AND u.deleted_at IS NULL
         ");
@@ -183,7 +183,7 @@ class LoginController
             return;
         }
 
-        $stmt = $db->prepare("SELECT id as user_id, password, username FROM users WHERE username = :username AND deleted_at IS NULL");
+        $stmt = $db->prepare("SELECT id as user_id, password, username, session_version FROM users WHERE username = :username AND deleted_at IS NULL");
         $stmt->bindParam(':username', $username, PDO::PARAM_STR);
         $stmt->execute();
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
