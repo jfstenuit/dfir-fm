@@ -103,7 +103,8 @@ function lockUser(email) {
 }
 
 function deleteUser(email) {
-    if (confirm(`Delete user ${email}?`)) {
+    if (confirm(`Delete user ${email}?\n\nThe account is disabled for good and its address is replaced by a pseudonym. `
+                + 'Its files, folders and log entries are kept.')) {
         act({ a: 'deleteUser', email }, 'User deleted.');
     }
 }

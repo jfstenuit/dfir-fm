@@ -67,7 +67,9 @@ class Database
     password TEXT NOT NULL,
     email TEXT UNIQUE,
     invitation_token TEXT,
-    token_expiry DATETIME
+    token_expiry DATETIME,
+    deleted_at DATETIME,
+    deleted_by INTEGER
             );",
 
             "CREATE TABLE IF NOT EXISTS groups (
@@ -196,6 +198,36 @@ class Database
 
         if ($version < 2) {
             self::migrateToV2();
+        }
+
+        if ($version < 3) {
+            self::migrateToV3();
+        }
+    }
+
+    /**
+     * v3: soft deletion of accounts (users.deleted_at, users.deleted_by).
+     * Deleted accounts keep their row, so that files.uploaded_by and
+     * directories.created_by keep pointing to them.
+     */
+    private static function migrateToV3()
+    {
+        $db = self::$connection;
+        $db->exec("BEGIN IMMEDIATE");
+        try {
+            if ((int)$db->query("PRAGMA user_version")->fetchColumn() >= 3) {
+                $db->exec("COMMIT"); // another request migrated meanwhile
+                return;
+            }
+            if (!self::hasColumn('users', 'deleted_at')) {
+                $db->exec("ALTER TABLE users ADD COLUMN deleted_at DATETIME");
+                $db->exec("ALTER TABLE users ADD COLUMN deleted_by INTEGER");
+            }
+            $db->exec("PRAGMA user_version = 3");
+            $db->exec("COMMIT");
+        } catch (\Throwable $e) {
+            $db->exec("ROLLBACK");
+            throw $e;
         }
     }
 

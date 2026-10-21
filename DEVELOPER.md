@@ -10,6 +10,7 @@ Command-line tools live in `bin/` and refuse to run outside the CLI SAPI:
 - `php bin/create-admin.php <username>`: creates an administrator (or resets an existing user's password and adds them to the admin group) and prints a random password once. This is how the first administrator is created; no default account exists. It's also the break-glass tool when every administrator is locked out: it needs shell access only, and no identity provider.
 - `php bin/send-test-mail.php <recipient>`: sends a test e-mail through the configured mail engine, exactly as invitations are sent. Exit code 0 when the engine accepted the message, 1 with the reason on stderr otherwise. Run it as the web server user (e.g. `sudo -u www-data php bin/send-test-mail.php …`) to also check its permissions.
 - `php bin/check-integrity.php`: re-hashes every stored file and compares it with its `files` record (SHA-256 and size). Also reports `files` rows that share a name or a SHA-256 in one directory, and, with the local storage engine, files in storage without a record. Read-only; exit code 0 when everything matches, 1 otherwise.
+- `php bin/find-deleted-user.php <email>`: lists the deleted accounts of an e-mail address (see *Deleted accounts*), with their id, so that `files.uploaded_by`, `directories.created_by` and the log can be searched by id. Read-only; each lookup is logged with the hash of the address, not the address. Exit code 0 when an account was found, 1 otherwise.
 - `php bin/expire-uploads.php`: expires uploads without activity for `upload_stale_after` seconds and deletes their staging files. The application also does this whenever an upload starts; the script is for a cron job.
 
 Routes (`index.php`). Authentication and CSRF checks are global, in `index.php`: every route but `/login` requires a session (otherwise a redirect to `login?redirect=…`), and every POST a valid CSRF token. Authorization (admin, folder rights) is checked by each controller action, through `AccessMiddleware`. POST requests select their action with the field `a`.
@@ -52,6 +53,7 @@ project-root/
 │   ├── create-admin.php       # Create the first / an additional administrator
 │   ├── send-test-mail.php     # Check the mail configuration
 │   ├── check-integrity.php    # Re-hash stored files against the database
+│   ├── find-deleted-user.php  # Deleted accounts of an e-mail address
 │   └── expire-uploads.php     # Expire abandoned uploads (cron)
 ├── .dockerignore              # Build context of the image: only what it needs
 ├── docker/                    # Container deployment (see "Docker")
@@ -154,7 +156,7 @@ composer test:feature    # HTTP-level, ~1 min
 ```
 
 - **`tests/Unit/`**: no web server. Client IP resolution, config parsing and `database_path`, `Content-Disposition`, Range parsing, login redirect targets, storage path validation and staging, backend factories, log records, mail engine configuration and message building, schema and migrations, admin checks, throttle settings, and the upload state machine (`ChunkedUploadTest`: chunks out of order or sent twice, missing chunks, tampered staging, name and content conflicts, rights, geometry, sizes, abort), on a real SQLite database and local storage in a temporary directory.
-- **`tests/Feature/`**: the application over HTTP: login and rate limiting, sessions and cookies, admin authorization, file listing, uploads and downloads, mail, HTTP headers and routing, the `bin/` scripts, `database_path`. Each test starts a fresh, isolated instance on PHP's built-in server (`Tests\Support\TestServer`) in a temporary directory, with its own `.env`, SQLite database, storage, log file and APCu counters. The project's own `.env`, database and storage are never touched.
+- **`tests/Feature/`**: the application over HTTP: login and rate limiting, sessions and cookies, admin authorization, account deletion, file listing, uploads and downloads, mail, HTTP headers and routing, the `bin/` scripts, `database_path`. Each test starts a fresh, isolated instance on PHP's built-in server (`Tests\Support\TestServer`) in a temporary directory, with its own `.env`, SQLite database, storage, log file and APCu counters. The project's own `.env`, database and storage are never touched.
   - Fixtures: an admin created through `bin/create-admin.php` and a regular user `bob@test.local`. The root directory (id 1) is created by the schema setup, as on a real install.
   - `tests/Support/router.php` mirrors `.htaccess` for the built-in server, so `.htaccess` itself still needs checking on a real Apache.
   - `Tests\Support\HttpClient` behaves like a browser: it keeps cookies and handles the CSRF token and login form.
@@ -225,9 +227,9 @@ The logger is globally available via `App::getLogger()` and all controller-level
 - Uploads: `upload_start`, `upload_verifying`, `upload_completed` (with size and SHA-256), `upload_name_conflict`, `upload_duplicate_refused`, `upload_denied`, `upload_chunk_rejected`, `upload_failed`, `upload_aborted`, `upload_expired`, `upload_verify_restarted`
 - Downloads: `download_success`, `download_partial`, `download_failure`
 - Folders and files: `directory_created`, `directory_deleted`, `file_deleted`, `filemanager_failure` (a missing folder requested)
-- Administration: `user_invited` (with `invitation_sent`), `user_locked`, `user_deleted`, `group_created`, `group_deleted`, `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
+- Administration: `user_invited` (with `invitation_sent`), `user_locked`, `user_deleted` (with `target_user_id` and `pseudonym`), `group_created`, `group_deleted`, `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
 - Mail failures: `mail_send_failure`
-- Command line: `cli_admin_created` (`bin/create-admin.php`, also when it resets a password) and `cli_test_mail_sent`, with `username` set to `cli:` + the system user; `upload_expired` from `bin/expire-uploads.php`, without a username
+- Command line: `cli_admin_created` (`bin/create-admin.php`, also when it resets a password), `cli_test_mail_sent` and `cli_deleted_user_lookup` (with `address_hash` and the account ids found), with `username` set to `cli:` + the system user; `upload_expired` from `bin/expire-uploads.php`, without a username
 
 Not logged yet: password changes from the profile dialog.
 
@@ -260,9 +262,20 @@ Access rights :
 | 🔁 Resend Invitation | A new invitation link | Admin UI, Users tab |
 | 👥 Group memberships | Add or remove a user's groups | Admin UI, Users tab |
 | 🔒 Lock User | Makes the password and any pending invitation unusable | Admin UI, Users tab |
-| 🗑️ Delete User | Removes the account. Their files stay in storage and in `files`, but the listings no longer show them (they join on `users`) | Admin UI, Users tab |
+| 🗑️ Delete User | Disables the account for good and replaces its address by a pseudonym (see *Deleted accounts*). Its files, folders and log entries are kept | Admin UI, Users tab |
 
 Changing a user's name or e-mail address isn't available. The invitation workflow is under review (#22).
+
+#### Deleted accounts
+
+Accounts are never removed from `users`, so that `files.uploaded_by` and `directories.created_by` keep pointing to an account (chain of custody). Deleting a user, in one transaction:
+- replaces `username` and `email` by the pseudonym `deleted:<SHA-256 of the lowercased address>:<user id>` (the id lets one address be deleted more than once; both columns are `UNIQUE`);
+- sets `password = '!'`, clears any invitation token, records `deleted_at` (UTC) and `deleted_by`;
+- removes the account's group memberships.
+
+Listings show the uploader of its files as `deleted user #<id>` (and `unknown user #<id>` for an id without a `users` row, from deletions made before this rule). A deleted account is hidden from the Users tab, refused by the login (password and token), by the admin actions on users and by `bin/create-admin.php`. Inviting the same address again creates a new account, with a new id.
+
+The pseudonym is pseudonymous, not anonymous: anyone who has the address can compute its hash and find the account. That is the purpose: an investigation about an address can still find what the account did, with `bin/find-deleted-user.php`. Under the GDPR it remains personal data. The application log keeps clear addresses in the events logged before the deletion, for the log's own retention period.
 
 ---
 
@@ -309,6 +322,8 @@ Database initialization is handled programmatically in `src/Core/Database.php`.
 - **v1:** adds `groups.is_admin` and flags group `id = 1`, the group the former hardcoded admin check trusted. It also locks the formerly seeded `admin` account if it still has the default password `admin`; the lock is reported in the PHP error log. Create a new administrator with `php bin/create-admin.php <username>`.
 - **v2:** replaces the v1 `uploads` table (in-progress v1 uploads are discarded; their partial files, left at their final path by the v1 code, are listed in the PHP error log) with `uploads` and `upload_chunks`, and adds the unique indexes `files(directory_id, name)` and `files(directory_id, sha256)`. The v1 upload code could create two rows for one name; the migration never drops such evidence records. If it finds any, it stops, lists them in the PHP error log, and the application refuses to run until an operator resolves them. `bin/check-integrity.php` lists them too, along with stored files that no longer match their hash.
 
+- **v3:** adds `users.deleted_at` and `users.deleted_by` (soft deletion of accounts). Existing accounts stay active; accounts deleted before v3 have no row any more, and their files are listed as `unknown user #<id>`.
+
 To add a migration, add a `if ($version < N)` block in `migrate()` that ends with `PRAGMA user_version = N`. Back up the database file (`database_path`, by default `storage/database/app.sqlite`) before upgrading.
 
 No user is seeded. A fresh install has an empty admin group: create the first administrator with `bin/create-admin.php`.
@@ -319,7 +334,7 @@ All database logic uses raw SQL for performance and transparency.
 
 Extract the database structure with `sqlite3 <database_path> '.schema'` (by default `storage/database/app.sqlite`; in the Docker container, `/data/database/app.sqlite`).
 
-SQLite doesn't enforce the `FOREIGN KEY` clauses here: the application doesn't enable `PRAGMA foreign_keys`, so `ON DELETE CASCADE` has no effect. Deleting a user leaves their `user_group` rows, and deleting a group or a folder leaves its `access_rights` rows. `AUTOINCREMENT` ids are never reused, so these rows grant nothing, but they remain.
+SQLite doesn't enforce the `FOREIGN KEY` clauses here: the application doesn't enable `PRAGMA foreign_keys`, so `ON DELETE CASCADE` has no effect. Deleting a group or a folder leaves its `access_rights` rows, and users deleted before soft deletion (migration v3) left their `user_group` rows. `AUTOINCREMENT` ids are never reused, so these rows grant nothing, but they remain.
 
 Database structure is : 
 ```
@@ -329,7 +344,9 @@ CREATE TABLE users (
     password TEXT NOT NULL,
     email TEXT UNIQUE,
     invitation_token TEXT,
-    token_expiry DATETIME
+    token_expiry DATETIME,
+    deleted_at DATETIME,         -- soft deletion (see Deleted accounts)
+    deleted_by INTEGER
 );
 CREATE TABLE IF NOT EXISTS 'groups' (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -553,7 +570,6 @@ Each backend is responsible for parsing its configuration from the `.env` file.
 - Only the local storage engine exists (Azure Blob and S3: #6, #7)
 - Session idle timeout hardcoded to 1 hour; no absolute lifetime; locking or deleting a user doesn't end their open sessions (#16)
 - Password changes aren't logged, and the profile dialog doesn't ask for the current password
-- A deleted user's files disappear from the listings (see *User Management*)
 - No forgotten-password reset (#1); the Logs tab of the admin page is empty (#23)
 - Login rate-limit counters are per server (APCu)
 

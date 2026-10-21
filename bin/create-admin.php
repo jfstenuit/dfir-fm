@@ -24,12 +24,17 @@ use Core\App;
 use Core\Config;
 use Core\Database;
 use Backends\LogEngineFactory;
+use Middleware\AccessMiddleware;
 
 if ($argc !== 2 || $argv[1] === '' || str_starts_with($argv[1], '-')) {
     fwrite(STDERR, "Usage: php bin/create-admin.php <username>\n");
     exit(2);
 }
 $username = trim($argv[1]);
+if (str_starts_with($username, AccessMiddleware::DELETED_PREFIX)) {
+    fwrite(STDERR, "'$username' is a deleted account; it cannot be reactivated. Create a new account with the person's address.\n");
+    exit(2);
+}
 
 $config = Config::load(ENV_FILE);
 $db = Database::initialize(Config::databasePath($config, BASE_PATH));

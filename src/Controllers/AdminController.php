@@ -442,7 +442,7 @@ class AdminController
     {
         header('Content-Type: application/json');
 
-        $stmt = $db->query("SELECT id, username, `password`, invitation_token, token_expiry FROM users");
+        $stmt = $db->query("SELECT id, username, `password`, invitation_token, token_expiry FROM users WHERE deleted_at IS NULL");
         $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $result = [];
@@ -495,7 +495,7 @@ class AdminController
         }
 
         // Lookup user by email (username is email unless it's 'admin')
-        $stmt = $db->prepare("SELECT id FROM users WHERE username = :email");
+        $stmt = $db->prepare("SELECT id, username, email FROM users WHERE username = :email AND deleted_at IS NULL");
         $stmt->execute([':email' => $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -514,15 +514,21 @@ class AdminController
             return;
         }
 
-        $stmt = $db->prepare("DELETE FROM users WHERE id = :id");
-        $success = $stmt->execute([':id' => $user['id']]);
+        // Soft deletion: the row stays, so that the files and folders of the
+        // account keep their uploader. Credentials and memberships go, and
+        // the address is replaced by a pseudonym derived from it.
+        $pseudonym = AccessMiddleware::deletedPseudonym($user['email'] ?: $user['username'], (int)$user['id']);
+        $db->beginTransaction();
+        $stmt = $db->prepare("UPDATE users SET username = :pseudonym, email = :pseudonym, password = '!',
+                                     invitation_token = NULL, token_expiry = NULL,
+                                     deleted_at = :now, deleted_by = :by
+                              WHERE id = :id");
+        $stmt->execute([':pseudonym' => $pseudonym, ':now' => gmdate('Y-m-d H:i:s'), ':by' => Session::getUserId(), ':id' => $user['id']]);
+        $db->prepare("DELETE FROM user_group WHERE user_id = :id")->execute([':id' => $user['id']]);
+        $db->commit();
 
-        if ($success) {
-            App::getLogger()->log('user_deleted', ['target_user'=>$email]);
-            echo json_encode(['success' => true]);
-        } else {
-            echo json_encode(['success' => false, 'message' => 'Failed to delete user.']);
-        }
+        App::getLogger()->log('user_deleted', ['target_user_id' => (int)$user['id'], 'pseudonym' => $pseudonym]);
+        echo json_encode(['success' => true]);
     }
 
     private static function addUserToGroup($config, PDO $db)
@@ -538,7 +544,7 @@ class AdminController
         }
     
         // Lookup user by email or username
-        $stmt = $db->prepare("SELECT id FROM users WHERE email = :email OR username = :email");
+        $stmt = $db->prepare("SELECT id FROM users WHERE (email = :email OR username = :email) AND deleted_at IS NULL");
         $stmt->execute([':email' => $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -647,7 +653,7 @@ class AdminController
         }
 
         // Lookup user
-        $stmt = $db->prepare("SELECT id FROM users WHERE email = :email OR username = :email");
+        $stmt = $db->prepare("SELECT id FROM users WHERE (email = :email OR username = :email) AND deleted_at IS NULL");
         $stmt->execute([':email' => $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 

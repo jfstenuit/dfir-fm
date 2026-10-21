@@ -6,6 +6,9 @@ use PDO;
 
 class AccessMiddleware
 {
+    /** Start of the username of a deleted account (see deletedPseudonym()) */
+    public const DELETED_PREFIX = 'deleted:';
+
     public static function getUserInfo($db, $selector, $createIfMissing=false)
     {
         if (preg_match('/^\d+$/',$selector)) {
@@ -34,6 +37,35 @@ class AccessMiddleware
         }
 
         return $ret;
+    }
+
+    /**
+     * SQL expression naming the user whose id is in $idColumn, the users
+     * row being joined as `u`: "deleted user #<id>" for a deleted account,
+     * "unknown user #<id>" when the row is missing (accounts removed before
+     * deletion became soft), NULL when $idColumn is NULL
+     */
+    public static function userLabel(string $idColumn): string
+    {
+        return "CASE WHEN u.id IS NULL THEN 'unknown user #' || $idColumn"
+             . " WHEN u.deleted_at IS NOT NULL THEN 'deleted user #' || u.id"
+             . " ELSE u.username END";
+    }
+
+    /**
+     * Username (and e-mail) of a deleted account: a hash of its address, so
+     * that the account of a known address can still be found
+     * (bin/find-deleted-user.php), and the account id, so that one address
+     * can be deleted more than once
+     */
+    public static function deletedPseudonym(string $address, int $userId): string
+    {
+        return self::DELETED_PREFIX . self::addressHash($address) . ':' . $userId;
+    }
+
+    public static function addressHash(string $address): string
+    {
+        return hash('sha256', mb_strtolower(trim($address)));
     }
 
     public static function generateTokenForUser($db, $selector)
@@ -311,7 +343,7 @@ class AccessMiddleware
                 NULL AS size,
                 NULL AS sha256,
                 d.created_at,
-                COALESCE(u.username, 'unknown user #' || d.created_by) AS created_by,
+                " . self::userLabel('d.created_by') . " AS created_by,
                 d.created_from
             FROM directories d
             LEFT JOIN users u ON d.created_by = u.id
@@ -329,7 +361,7 @@ class AccessMiddleware
                 f.size AS size,
                 f.sha256 AS sha256,
                 f.uploaded_at AS created_at,
-                COALESCE(u.username, 'unknown user #' || f.uploaded_by) AS created_by,
+                " . self::userLabel('f.uploaded_by') . " AS created_by,
                 f.uploaded_from AS created_from
             FROM files f
             LEFT JOIN users u ON f.uploaded_by = u.id
@@ -391,7 +423,7 @@ class AccessMiddleware
                     NULL AS size,
                     NULL AS sha256,
                     d.created_at,
-                    COALESCE(u.username, 'unknown user #' || d.created_by) AS created_by,
+                    " . self::userLabel('d.created_by') . " AS created_by,
                     d.created_from
                 FROM directories d
                 LEFT JOIN users u ON d.created_by = u.id
@@ -413,7 +445,7 @@ class AccessMiddleware
                         f.size AS size,
                         f.sha256 AS sha256,
                         f.uploaded_at AS created_at,
-                        COALESCE(u.username, 'unknown user #' || f.uploaded_by) AS created_by,
+                        " . self::userLabel('f.uploaded_by') . " AS created_by,
                         f.uploaded_from AS created_from
                     FROM files f
                     LEFT JOIN users u ON f.uploaded_by = u.id
@@ -432,7 +464,7 @@ class AccessMiddleware
                         f.size AS size,
                         f.sha256 AS sha256,
                         f.uploaded_at AS created_at,
-                        COALESCE(u.username, 'unknown user #' || f.uploaded_by) AS created_by,
+                        " . self::userLabel('f.uploaded_by') . " AS created_by,
                         f.uploaded_from AS created_from
                     FROM files f
                     LEFT JOIN users u ON f.uploaded_by = u.id

@@ -55,7 +55,7 @@ final class DatabaseTest extends TestCase
     {
         $db = $this->init('fresh.sqlite');
 
-        $this->assertSame(2, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(3, self::scalar($db, 'PRAGMA user_version'));
         $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM users'), 'no seeded user');
         $this->assertSame(1, self::scalar($db, 'SELECT COUNT(*) FROM groups WHERE is_admin = 1'));
         $this->assertSame(['user_id', 'group_id'], $db->query('PRAGMA table_info(user_group)')->fetchAll(PDO::FETCH_COLUMN, 1));
@@ -145,7 +145,7 @@ final class DatabaseTest extends TestCase
         });
 
         $db = $this->init('v1.sqlite');
-        $this->assertSame(2, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(3, self::scalar($db, 'PRAGMA user_version'));
         $this->assertContains('client_uuid', $db->query('PRAGMA table_info(uploads)')->fetchAll(PDO::FETCH_COLUMN, 1));
         $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM uploads'), 'v1 uploads discarded');
         $this->assertSame(3, self::scalar($db, 'SELECT COUNT(*) FROM files'), 'files kept; NULL hashes may repeat');
@@ -153,6 +153,22 @@ final class DatabaseTest extends TestCase
 
         $this->expectException(\PDOException::class);
         $db->exec("INSERT INTO files (directory_id, name, size) VALUES (1, 'a', 2)");
+    }
+
+    public function testMigrationV3AddsSoftDeletionColumns(): void
+    {
+        $db = $this->init('v2.sqlite');
+        $db->exec("INSERT INTO users (username, password) VALUES ('alice@example.org', 'x')");
+        $db->exec("ALTER TABLE users DROP COLUMN deleted_at");
+        $db->exec("ALTER TABLE users DROP COLUMN deleted_by");
+        $db->exec("PRAGMA user_version = 2");
+
+        $db = $this->init('v2.sqlite');
+        $this->assertSame(3, self::scalar($db, 'PRAGMA user_version'));
+        $columns = $db->query('PRAGMA table_info(users)')->fetchAll(PDO::FETCH_COLUMN, 1);
+        $this->assertContains('deleted_at', $columns);
+        $this->assertContains('deleted_by', $columns);
+        $this->assertSame(1, self::scalar($db, 'SELECT COUNT(*) FROM users WHERE deleted_at IS NULL'), 'existing accounts not deleted');
     }
 
     public function testMigrationV2StopsOnDuplicateFiles(): void

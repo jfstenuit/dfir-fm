@@ -50,7 +50,7 @@ class LoginController
         $stmt = $db->prepare("
             SELECT u.id AS user_id, u.username, u.invitation_token, u.token_expiry
             FROM users u
-            WHERE u.username = :email
+            WHERE u.username = :email AND u.deleted_at IS NULL
         ");
         $stmt->bindParam(':email', $email, PDO::PARAM_STR);
         $stmt->execute();
@@ -183,7 +183,7 @@ class LoginController
             return;
         }
 
-        $stmt = $db->prepare("SELECT id as user_id, password, username FROM users WHERE username = :username");
+        $stmt = $db->prepare("SELECT id as user_id, password, username FROM users WHERE username = :username AND deleted_at IS NULL");
         $stmt->bindParam(':username', $username, PDO::PARAM_STR);
         $stmt->execute();
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
