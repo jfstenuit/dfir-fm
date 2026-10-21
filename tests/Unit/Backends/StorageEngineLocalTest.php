@@ -44,6 +44,12 @@ final class StorageEngineLocalTest extends TestCase
         $this->assertSame(realpath($this->dir), (new \ReflectionProperty($engine, 'baseDirectory'))->getValue($engine));
     }
 
+    public function testFreeSpaceOfTheBaseDirectory(): void
+    {
+        // Other processes write meanwhile: close enough
+        $this->assertEqualsWithDelta(disk_free_space($this->dir), (new StorageEngineLocal($this->dir))->freeSpace(), 64 << 20);
+    }
+
     public function testReadAtReturnsTheStringZero(): void
     {
         // `$data ?: null` used to turn the chunk "0" into a read failure

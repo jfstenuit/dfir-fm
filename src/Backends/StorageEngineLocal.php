@@ -293,6 +293,13 @@ class StorageEngineLocal implements StorageEngineInterface
         return !file_exists($path) || unlink($path);
     }
 
+    /** Free space of the file system holding the base directory (staging is on the same one) */
+    public function freeSpace(): ?int
+    {
+        $free = @disk_free_space($this->baseDirectory);
+        return $free === false ? null : (int)$free;
+    }
+
     /**
      * Perform a health check to ensure the storage engine is functional.
      *

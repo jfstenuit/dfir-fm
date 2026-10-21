@@ -259,6 +259,10 @@ function initDropzone() {
         chunking: true,
         forceChunking: true,
         chunkSize: 2 * 1024 * 1024,
+        // No client-side limit (Dropzone's default is 256 MiB): evidence has
+        // no size limit by default (D16); the server's probe checks
+        // upload_max_size and the free space
+        maxFilesize: null,
         parallelChunkUploads: false,
         // Safe: the server writes each chunk at its own offset
         retryChunks: true,

@@ -491,6 +491,7 @@ Dropzone 6's chunked upload, with a server that makes it safe for evidence (`Con
 | 413 | `EntityTooLarge` (over `upload_max_size`, or over PHP's request limits) |
 | 422 | `SizeMismatch` |
 | 500 | `StorageError`, `ServerError`, `InternalError` |
+| 507 | `InsufficientStorage` (the file doesn't fit in the storage's free space; see below) |
 
 As on every route, an expired session gets a redirect to the login page and a refused CSRF token a `403` with `code: csrf_invalid` (see *CSRF Protection*).
 
@@ -562,6 +563,8 @@ Besides reading, uploads need a **staging** area (`stagingCreate`, `stagingWrite
 - A reverse proxy: e.g. nginx's `client_max_body_size`, 1m by default, which is too small.
 
 The largest file is set by `upload_max_size`, not by these limits.
+
+**File size and disk space (D16).** `upload_max_size` is empty by default, on purpose: evidence such as disk images has no natural size limit, so files are limited only by the disk. The resource-exhaustion risk this leaves (DFM-09) is accepted; a deployment that wants a limit sets one. Dropzone's own client-side limit (256 MiB by default) is turned off (`maxFilesize: null`), so the server decides. What the server does check, at the `checkRights` probe and again at an upload's first chunk, is that the declared size fits: `StorageEngineInterface::freeSpace()` (`disk_free_space()` of the storage directory for the local engine; `null` if unknown, and then nothing is checked), minus the bytes still to come for the other uploads in progress (declared size minus the chunks received; the same user's earlier attempt at the same file isn't counted, since a new start replaces it), minus `ChunkedUpload::FREE_SPACE_MARGIN` (64 MiB, kept for the database, logs and the system). A file that doesn't fit gets `507 InsufficientStorage` with the sizes in decimal units, as the upload dialog shows them, and is logged as `upload_denied` with `cause: Insufficient storage`. This is a check at the start, not a reservation: a disk filled by something else later still makes a chunk write fail (`500 StorageError`). Monitor the storage's free space.
 
 ## Docker
 

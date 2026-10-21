@@ -40,6 +40,9 @@ final class ChunkedUpload
 
     private const ACTIVE = "('in_progress', 'verifying')";
 
+    /** Free space never handed to uploads: room for the database, logs and the system */
+    public const FREE_SPACE_MARGIN = 64 << 20;
+
     private int $staleAfter;
     private ?int $maxSize;
 
@@ -82,6 +85,7 @@ final class ChunkedUpload
         $directory = $this->writableDirectory($userId, self::cwd($cwd));
         if ($size !== null) {
             $this->checkSize($size, $name ?? '', $directory);
+            $this->checkFreeSpace($userId, $size, $name ?? '', $directory);
         }
         if ($name !== null) {
             $this->validateName($name, $directory);
@@ -277,6 +281,7 @@ final class ChunkedUpload
     {
         $directory = $this->writableDirectory($userId, $cwd);
         $this->checkSize($size, $name, $directory);
+        $this->checkFreeSpace($userId, $size, $name, $directory);
         $this->validateName($name, $directory);
         $this->checkNameFree($directory, $name);
 
@@ -456,6 +461,48 @@ final class ChunkedUpload
             $this->logger->log('upload_denied', ['file' => $name, 'directory' => $directory['path'], 'size' => $size, 'cause' => 'File too large']);
             throw new UploadException(413, 'EntityTooLarge', sprintf('The file is larger than the maximum upload size (%d bytes).', $this->maxSize));
         }
+    }
+
+    /**
+     * D16: no size limit by default, but a file that can't fit is refused
+     * before its bytes are sent. Free space is what the storage reports,
+     * minus the bytes still to come for the other uploads in progress (not
+     * the same user's earlier attempt at this file, which a new start
+     * replaces) and FREE_SPACE_MARGIN. Checked at the probe and at the first
+     * chunk; a disk filled by something else later still fails the write.
+     */
+    private function checkFreeSpace(int $userId, int $size, string $name, array $directory): void
+    {
+        $free = $this->storage->freeSpace();
+        if ($free === null) {
+            return;
+        }
+        $pending = $this->db->prepare("SELECT COALESCE(SUM(MAX(u.size - COALESCE((SELECT SUM(c.size) FROM upload_chunks c WHERE c.upload_id = u.id), 0), 0)), 0)
+                                       FROM uploads u
+                                       WHERE u.status = 'in_progress'
+                                         AND NOT (u.user_id = :user AND u.directory_id = :dir AND u.name = :name)");
+        $pending->execute([':user' => $userId, ':dir' => $directory['id'], ':name' => $name]);
+        $available = max(0, $free - (int)$pending->fetchColumn() - self::FREE_SPACE_MARGIN);
+        if ($size > $available) {
+            $this->logger->log('upload_denied', ['file' => $name, 'directory' => $directory['path'], 'size' => $size,
+                                                 'available' => $available, 'cause' => 'Insufficient storage']);
+            throw new UploadException(507, 'InsufficientStorage', sprintf(
+                'Not enough free space on the server for this file (%s needed, %s available). Ask an administrator to free or add storage.',
+                self::humanSize($size), self::humanSize($available)));
+        }
+    }
+
+    /** 1500 -> "1.5 KB", for messages: decimal units, as the upload dialog shows file sizes */
+    private static function humanSize(int $bytes): string
+    {
+        $units = ['bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
+        $i = 0;
+        $value = (float)$bytes;
+        while ($value >= 1000 && $i < count($units) - 1) {
+            $value /= 1000;
+            $i++;
+        }
+        return $i === 0 ? "$bytes bytes" : sprintf('%.1f %s', $value, $units[$i]);
     }
 
     /** Names the storage can hold, the same on every engine */

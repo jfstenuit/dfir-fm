@@ -41,7 +41,11 @@ final class ChunkedUploadTest extends TestCase
         $this->db->exec("INSERT INTO user_group (user_id, group_id) VALUES (1, 10), (2, 11)");
         $this->db->exec("INSERT INTO access_rights (group_id, directory_id, can_view, can_write, can_upload)
                          VALUES (10, 1, 1, 1, 1), (10, 2, 1, 0, 1), (11, 1, 0, 0, 1)");
-        $this->storage = new StorageEngineLocal("$this->dir/files");
+        // Free space can be set by a test; null: the real one
+        $this->storage = new class("$this->dir/files") extends StorageEngineLocal {
+            public ?int $free = null;
+            public function freeSpace(): ?int { return $this->free ?? parent::freeSpace(); }
+        };
     }
 
     protected function tearDown(): void
@@ -409,6 +413,37 @@ final class ChunkedUploadTest extends TestCase
         $this->assertRefused(413, 'EntityTooLarge', fn() => $this->send('123456789', service: $service));
         $this->send('12345678', service: $service);
         $this->assertSame('completed', $service->complete(self::ALICE, self::UUID)['status']);
+    }
+
+    public function testLargerThanFreeSpaceRefused(): void
+    {
+        $this->storage->free = ChunkedUpload::FREE_SPACE_MARGIN + 8;
+        $e = $this->assertRefused(507, 'InsufficientStorage', fn() => $this->service()->probe(self::ALICE, '', 'big.bin', 9));
+        $this->assertStringContainsString('(9 bytes needed, 8 bytes available)', $e->getMessage());
+        $this->assertRefused(507, 'InsufficientStorage', fn() => $this->send('123456789'));
+        $this->assertSame('0', (string)$this->db->query("SELECT COUNT(*) FROM uploads")->fetchColumn(), 'nothing started');
+
+        $this->service()->probe(self::ALICE, '', 'fits.bin', 8);
+        $this->send('12345678');
+        $this->assertSame('completed', $this->service()->complete(self::ALICE, self::UUID)['status']);
+        $this->assertSame(['Insufficient storage', 'Insufficient storage'],
+            array_column(array_column(array_filter($this->log, fn($e) => $e[0] === 'upload_denied'), 1), 'cause'));
+    }
+
+    public function testBytesStillToComeForOtherUploadsAreReserved(): void
+    {
+        $this->storage->free = ChunkedUpload::FREE_SPACE_MARGIN + 10;
+        // Bob's upload of 8 bytes, first half received: 4 bytes still to come
+        $this->send('abcdefgh', 'other.bin', indexes: [0], user: self::BOB, uuid: self::UUID2);
+        $this->assertRefused(507, 'InsufficientStorage', fn() => $this->service()->probe(self::ALICE, '', 'big.bin', 7));
+        $this->service()->probe(self::ALICE, '', 'big.bin', 6);
+
+        // Bob's own earlier attempt at the same file isn't counted: a new start replaces it
+        $this->service()->probe(self::BOB, '', 'other.bin', 10);
+
+        // Unknown free space: no check
+        $this->storage->free = null;
+        $this->service()->probe(self::ALICE, '', 'big.bin', 1 << 20);
     }
 
     public function testSizeSettings(): void

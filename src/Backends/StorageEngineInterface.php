@@ -91,6 +91,12 @@ interface StorageEngineInterface
     public function stagingRemove(string $key): bool;
 
     /**
+     * Bytes free for new data in the storage (staging included), or null if
+     * the engine can't tell (uploads are then not checked against it).
+     */
+    public function freeSpace(): ?int;
+
+    /**
      * Perform a health check to ensure the storage engine is functional.
      *
      * @return bool True if the storage engine is working, false otherwise.

@@ -131,6 +131,27 @@ final class UploadTest extends FeatureTestCase
         $this->assertSame([413, 'EntityTooLarge'], [$probe->status, $probe->json()['code']]);
     }
 
+    /** Larger than any disk the tests run on: refused for the real free space, at the probe and at the first chunk */
+    public function testLargerThanFreeSpaceRefused(): void
+    {
+        $client = $this->uploader();
+        $huge = '900000000000000';   // 900 TB, within the 15 digits a chunk may declare
+        $probe = $client->post('upload', ['a' => 'checkRights', 'cwd' => '', 'name' => 'image.E01', 'size' => $huge]);
+        $this->assertSame([507, 'InsufficientStorage'], [$probe->status, $probe->json()['code']], $probe->body);
+        $this->assertStringContainsString('Not enough free space on the server', $probe->json()['message']);
+        $this->assertStringContainsString('900.0 TB needed', $probe->json()['message']);
+
+        // A client that skips the probe: refused before anything is staged
+        $chunkSize = 1 << 20;
+        $first = $this->chunk($client, str_repeat('x', $chunkSize), 0, $chunkSize, 'image.E01', [
+            'dztotalfilesize' => $huge, 'dztotalchunkcount' => (string)intdiv((int)$huge + $chunkSize - 1, $chunkSize)]);
+        $this->assertSame([507, 'InsufficientStorage'], [$first->status, $first->json()['code']], $first->body);
+        $this->assertSame([], glob($this->server->root . '/storage/files/.uploads/*'));
+        $this->assertSame('0', (string)$this->server->db()->query("SELECT COUNT(*) FROM uploads")->fetchColumn());
+        $this->assertSame(['Insufficient storage', 'Insufficient storage'],
+            array_column($this->server->logEntries('upload_denied'), 'cause'));
+    }
+
     public function testFolderNamesStartingWithADotRefused(): void
     {
         $this->server->grantRootAccess(TestServer::BOB);
