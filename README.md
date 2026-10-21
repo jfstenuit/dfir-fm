@@ -54,16 +54,15 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
      php bin/send-test-mail.php you@yourdomain.com
      ```
 
-4. (Optional) Run the application with Docker Compose instead (no `composer install` needed on the host). Its configuration is `docker/.env`: copy `.env.sample` there, customize it as in step 3 and uncomment its "Docker" section. The three paths of the file (files, database, log) are ignored: the container keeps them under `/data`, and the "Docker" section chooses what is mounted there: `files_dir` and `log_dir`, host directories owned by the container's web server user (uid 82); left empty, Docker volumes. The database is always in a volume.
+4. (Optional) Run the application with Docker Compose instead (no `composer install` needed on the host). Its configuration is `docker/.env`: copy `.env.sample` there, customize it as in step 3 and uncomment its "Docker" section. The three paths of the file (files, database, log) are ignored: the container keeps them under `/data`, and the "Docker" section chooses what is mounted there: `files_dir` and `log_dir`, host directories; left empty, Docker volumes. The database is always in a volume. The container's web server user is uid/gid 82, or `uid` and `gid` if set: set them to the owner of the host directories to mount them as they are.
    ```bash
-   sudo install -d -o 82 -g 82 -m 750 /srv/dfir-fm/files   # if files_dir=/srv/dfir-fm/files
    cp .env.sample docker/.env      # then edit it
-   sudo chgrp 82 docker/.env && chmod 640 docker/.env
+   chmod 640 docker/.env           # with uid/gid unset: sudo chgrp 82 docker/.env, and directories owned by 82
    cd docker
    docker compose up -d --build
    docker compose exec -u www-data app php bin/create-admin.php you@yourdomain.com
    ```
-   The application is then available at `http://127.0.0.1:8080/`. Serve it to others through a TLS-terminating reverse proxy. See `DEVELOPER.md`, "Docker".
+   The application is then available at `http://127.0.0.1:8080/` (or the port set by `http_port` in the "Docker" section). Serve it to others through a TLS-terminating reverse proxy. See `DEVELOPER.md`, "Docker".
 
 ---
 

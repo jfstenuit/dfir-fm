@@ -5,10 +5,12 @@ FROM php:8.4-fpm-alpine
 
 WORKDIR /var/www/html
 
-# lighttpd, bash for start.sh, unzip for Composer,
-# APCu (login rate limiting: logins fail without it)
-RUN apk add --no-cache lighttpd bash unzip \
-    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
+# lighttpd, bash for start.sh, shadow for its usermod/groupmod (uid, gid),
+# unzip for Composer, APCu (login rate limiting: logins fail without it),
+# GMP (required by sendgrid/sendgrid and starkbank/ecdsa)
+RUN apk add --no-cache lighttpd bash shadow unzip gmp \
+    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS gmp-dev \
+    && docker-php-ext-install gmp \
     && pecl install apcu \
     && docker-php-ext-enable apcu \
     && apk del .build-deps \
@@ -36,7 +38,8 @@ COPY bin bin/
 RUN composer dump-autoload --no-dev --optimize \
     && chmod 755 /usr/local/bin/start.sh
 
-# Data, outside the web root, owned by www-data (uid 82):
+# Data, outside the web root, owned by www-data (uid 82; with APP_UID/APP_GID,
+# start.sh changes www-data's ids and hands the volumes over at start):
 #   /data/files     the evidence (base_storage_directory)
 #   /data/database  the SQLite database (database_path)
 #   /data/logs      the log file (log_file_path, with log_engine=file)
@@ -55,5 +58,9 @@ ENV DFIRFM_BASE_STORAGE_DIRECTORY=/data/files \
 VOLUME ["/data/files", "/data/database", "/data/logs"]
 
 EXPOSE 8080
+
+# The base image stops with SIGQUIT (PHP-FPM's graceful stop), which bash, as
+# PID 1, ignores: start.sh traps TERM and passes it on
+STOPSIGNAL SIGTERM
 
 CMD ["/usr/local/bin/start.sh"]

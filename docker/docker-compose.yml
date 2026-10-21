@@ -4,8 +4,9 @@
 #
 # Configuration: docker/.env, to create before the first start: copy the
 # project's .env.sample there and uncomment its Docker settings. Compose reads
-# it (files_dir, log_dir) and the container gets it as the application's .env.
-# It must be readable by the container's www-data user (uid/gid 82).
+# it (files_dir, log_dir, http_port, uid, gid) and the container gets it as
+# the application's .env. It must be readable by the container's www-data user
+# (uid/gid 82, or uid and gid if set).
 # See DEVELOPER.md, "Docker".
 services:
   app:
@@ -13,10 +14,19 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     restart: unless-stopped
+    environment:
+      # start.sh gives www-data this uid/gid, so that host directories
+      # (files_dir, log_dir) owned by that user need no chown (default 82),
+      # and hands the volumes over to it, but not the host directories
+      APP_UID: ${uid:-82}
+      APP_GID: ${gid:-82}
+      APP_FILES_DIR: ${files_dir:-}
+      APP_LOG_DIR: ${log_dir:-}
     ports:
       # Plain HTTP: publish it on the loopback interface only and put a
-      # TLS-terminating reverse proxy in front (trusted_proxies, force_https)
-      - "127.0.0.1:8080:8080"
+      # TLS-terminating reverse proxy in front (trusted_proxies, force_https).
+      # The host port is http_port if set, otherwise 8080
+      - "127.0.0.1:${http_port:-8080}:8080"
     volumes:
       # Configuration. In the container, base_storage_directory, database_path
       # and log_file_path are set by the image (/data/...): the host paths in
