@@ -1,0 +1,42 @@
+# Lint, dependency audit and tests on every push and pull request, and once a
+# week for new advisories against composer.lock
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The extensions composer.json requires, plus gmp (sendgrid/sendgrid);
+      # APCu enabled for the CLI (rate-limiting tests)
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: apcu, gmp, pdo_sqlite, curl, mbstring
+          ini-values: apc.enable_cli=1
+          tools: composer
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Lint
+        run: find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 php -l > /dev/null
+
+      - name: Audit dependencies
+        run: composer audit
+
+      - name: Tests
+        run: composer test

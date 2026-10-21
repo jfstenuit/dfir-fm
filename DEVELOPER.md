@@ -164,6 +164,8 @@ composer test:feature    # HTTP-level, ~1 min
 
 Not covered by PHPUnit: the JavaScript front end and the Apache and lighttpd rules (`router.php` stands in for them). Check those in a browser and with `curl` against a real server after changing them.
 
+**Continuous integration:** `.github/workflows/ci.yml` (GitHub Actions) runs on every push and pull request, and every Monday for new advisories: PHP 8.4 with the required extensions, `composer install` from the lock file, `php -l` on every PHP file outside `vendor/`, `composer audit` and `composer test`. Run `composer test` before committing anyway: it is the same check, sooner.
+
 Production installs should use `composer install --no-dev`, which leaves PHPUnit out of `vendor/`.
 
 ## Security Architecture
@@ -548,7 +550,6 @@ Each backend is responsible for parsing its configuration from the `.env` file.
 ## Known Limitations / To-Do
 
 - Database migrations are minimal (`PRAGMA user_version` steps in `Database::migrate()`), with no down-migrations
-- No continuous integration yet: run `composer test` before committing
 - Only the local storage engine exists (Azure Blob and S3: #6, #7)
 - Session idle timeout hardcoded to 1 hour; no absolute lifetime; locking or deleting a user doesn't end their open sessions (#16)
 - Password changes aren't logged, and the profile dialog doesn't ask for the current password
