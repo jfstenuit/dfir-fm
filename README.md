@@ -44,9 +44,9 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
    ```
 
 3. Configure the application:
-   - Copy the `.env.sample` file to `.env`, readable by the web server but not by everyone:
+   - Copy the `env.sample` file to `.env`, readable by the web server but not by everyone:
      ```bash
-     cp .env.sample .env
+     cp env.sample .env
      sudo chgrp www-data .env && chmod 640 .env
      ```
    - Edit the `.env` file to configure your settings (mail, storage directory, database and log paths, reverse proxy). The storage directory must exist; it and the directories of the database and the log file must be writable by the web server user and not web-accessible.
@@ -61,9 +61,9 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
      ```
    - Optionally, add a cron job that expires abandoned uploads (the application also does it when an upload starts), and run `php bin/check-integrity.php` from time to time to re-hash the stored files against the database.
 
-4. (Optional) Run the application with Docker Compose instead (no `composer install` needed on the host). Its configuration is `docker/.env`: copy `.env.sample` there, customize it as in step 3 and uncomment its "Docker" section. The three paths of the file (files, database, log) are ignored: the container keeps them under `/data`, and the "Docker" section chooses what is mounted there: `files_dir` and `log_dir`, host directories; left empty, Docker volumes. The database is always in a volume. The container's web server user is uid/gid 82, or `uid` and `gid` if set: set them to the owner of the host directories to mount them as they are.
+4. (Optional) Run the application with Docker Compose instead (no `composer install` needed on the host). Its configuration is `docker/.env`: copy `env.sample` there, customize it as in step 3 and uncomment its "Docker" section. The three paths of the file (files, database, log) are ignored: the container keeps them under `/data`, and the "Docker" section chooses what is mounted there: `files_dir` and `log_dir`, host directories; left empty, Docker volumes. The database is always in a volume. The container's web server user is uid/gid 82, or `uid` and `gid` if set: set them to the owner of the host directories to mount them as they are.
    ```bash
-   cp .env.sample docker/.env      # then edit it
+   cp env.sample docker/.env      # then edit it
    chmod 640 docker/.env           # with uid/gid unset: sudo chgrp 82 docker/.env, and directories owned by 82
    cd docker
    docker compose up -d --build

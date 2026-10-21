@@ -113,7 +113,7 @@ project-root/
 ├── vendor/                    # Composer dependencies (auto-generated)
 ├── composer.json              # Composer configuration file
 ├── composer.lock              # Composer lock file
-├── .env.sample                # Configuration template, copy to .env
+├── env.sample                 # Configuration template, copy to .env
 ├── .env                       # Environment variables (not in git)
 ├── .gitignore                 # Git ignore rules
 ├── DEVELOPER.md               # This document
@@ -453,7 +453,7 @@ The application uses an Interface/Factory pattern to dynamically select backends
 
 ### Mail engine
 
-Mail is only used for invitation links. `MailEngineFactory::create()` reads the flat `.env` keys (see `.env.sample`) and throws `InvalidArgumentException` on a missing or invalid setting:
+Mail is only used for invitation links. `MailEngineFactory::create()` reads the flat `.env` keys (see `env.sample`) and throws `InvalidArgumentException` on a missing or invalid setting:
 - `mail` (default): PHPMailer with `isMail()`, i.e. the local sendmail binary. PHPMailer encodes headers and rejects header injection; `default_mail_from` is also the envelope sender (`-f`).
 - `smtp`: PHPMailer over SMTP. `smtp_secure=none|starttls|smtps`. Not set means `none` (plain SMTP, no opportunistic STARTTLS), except on port 465, which gets `smtps`. `starttls` is required, not opportunistic: the send fails if the server doesn't offer it. Authentication only when `smtp_user` is set. `SMTPDebug` stays at 0: its output would end up in the HTTP response, and from level 2 it includes the `AUTH` exchange.
 - `sendgrid`: SendGrid Web API v3. An HTTP status ≥ 400 counts as a failure, with SendGrid's error body in the reason.
@@ -477,7 +477,7 @@ Besides reading, uploads need a **staging** area (`stagingCreate`, `stagingWrite
 
 ## Configuration
 
-`Core\Config::load()` reads `.env` (template: `.env.sample`):
+`Core\Config::load()` reads `.env` (template: `env.sample`):
 - one `key=value` per line; blank lines and lines starting with `#` are ignored;
 - a value wrapped in matching `"…"` or `'…'` is unquoted, and an optional `export ` prefix is accepted;
 - a `#` inside a value is kept, because passwords may contain one. There are no inline comments;
@@ -487,7 +487,7 @@ Besides reading, uploads need a **staging** area (`stagingCreate`, `stagingWrite
 
 **Permissions:** `.env` holds secrets and must be readable by the PHP user but not by everyone, e.g. owner you, group `www-data`, mode `640`. An unreadable `.env` stops the application with a 500 ("Environment file not readable"), rather than silently running on defaults as earlier versions did.
 
-**Keys.** `.env.sample` documents each one; this is the index:
+**Keys.** `env.sample` documents each one; this is the index:
 
 | Area | Keys |
 |---|---|
@@ -512,7 +512,7 @@ The largest file is set by `upload_max_size`, not by these limits.
 
 - **Processes:** PHP-FPM (listening on 127.0.0.1:9000 only) and lighttpd on port **8080**, both started in the foreground by `docker/start.sh`. When either exits, the script stops the other and exits, so the container stops and its restart policy applies. The image's stop signal is `SIGTERM` (the PHP base image's `SIGQUIT` is ignored by bash as PID 1, which made `docker compose stop` wait 10 s for a SIGKILL).
 - **Routing:** `docker/lighttpd.conf` mirrors `.htaccess`: the same static allowlist, 404 for `storage/`, `src/`, `bin/`, `docker/`, `tests/`, dotfiles and the rest of `assets/` and `vendor/`, everything else to `index.php`. lighttpd has no default MIME types: the file lists one per served extension, including `.mjs` (browsers refuse a module script with another type).
-- **Configuration:** `docker/.env`, created by the administrator from `.env.sample` (the same keys as a host install, plus its "Docker" section uncommented). It is not in git (`.gitignore`) and the repository ships no copy of it. It is mounted read-only as the application's `.env`; Compose refuses to start if it is missing, rather than creating a directory in its place. It must be readable by the container's `www-data`: uid/gid 82 (Alpine) by default, not the host's (33 on Debian), so `chgrp 82 docker/.env` with mode `640`; with `uid`/`gid` set (below), their owner. The file is read at each request, but the bind mount follows the file's inode: an editor that replaces the file (`sed -i`, some editors' save) leaves the container on the old one until `docker compose restart`. PHP-FPM passes the environment to PHP (`clear_env = no`), so a `DFIRFM_*` variable added to the compose file overrides a key.
+- **Configuration:** `docker/.env`, created by the administrator from `env.sample` (the same keys as a host install, plus its "Docker" section uncommented). It is not in git (`.gitignore`) and the repository ships no copy of it. It is mounted read-only as the application's `.env`; Compose refuses to start if it is missing, rather than creating a directory in its place. It must be readable by the container's `www-data`: uid/gid 82 (Alpine) by default, not the host's (33 on Debian), so `chgrp 82 docker/.env` with mode `640`; with `uid`/`gid` set (below), their owner. The file is read at each request, but the bind mount follows the file's inode: an editor that replaces the file (`sed -i`, some editors' save) leaves the container on the old one until `docker compose restart`. PHP-FPM passes the environment to PHP (`clear_env = no`), so a `DFIRFM_*` variable added to the compose file overrides a key.
 - **Compose reads `docker/.env` too:** it loads the `.env` of the compose file's directory for every command. Five keys, ignored by the application, choose the mounts, the port and the user: `files_dir`, `log_dir`, `http_port` (the host port, 8080 if unset), `uid` and `gid` (see "User"). A volume source that is an absolute path is a bind mount, a plain name is a named volume, so `${files_dir:-dfir-fm-files}` gives the host directory when the key is set and a volume otherwise. Compose expands `$` in unquoted or double-quoted values while reading the file: it only warns, the application still reads the file as written; single quotes avoid the warnings.
 - **Paths:** the image sets the three paths to its own locations, outside the web root, through `DFIRFM_*` variables, which win over the `.env`'s host paths:
 

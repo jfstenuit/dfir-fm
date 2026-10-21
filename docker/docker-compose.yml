@@ -3,7 +3,7 @@
 #   docker compose exec -u www-data app php bin/create-admin.php you@yourdomain.com
 #
 # Configuration: docker/.env, to create before the first start: copy the
-# project's .env.sample there and uncomment its Docker settings. Compose reads
+# project's env.sample there and uncomment its Docker settings. Compose reads
 # it (files_dir, log_dir, http_port, uid, gid) and the container gets it as
 # the application's .env. It must be readable by the container's www-data user
 # (uid/gid 82, or uid and gid if set).
