@@ -2,6 +2,7 @@
 namespace Tests\Unit\Backends;
 
 use Backends\MailEngineFactory;
+use Backends\MailEngineNone;
 use Backends\MailEnginePHPMailer;
 use Backends\MailEnginePHPMailerSMTP;
 use Backends\MailEngineSendGrid;
@@ -31,6 +32,7 @@ final class MailEngineTest extends TestCase
             'smtp' => [['mail_engine' => 'smtp', 'smtp_host' => 'mx.test', 'smtp_user' => 'u', 'smtp_password' => 'p', 'smtp_port' => '587'], MailEnginePHPMailerSMTP::class],
             // The class used to be referenced as MailEngineSendGrid but declared in MailEngineSendgrid.php
             'sendgrid' => [['mail_engine' => 'sendgrid', 'sendgrid_api_key' => 'SG.x'], MailEngineSendGrid::class],
+            'none' => [['mail_engine' => 'None'], MailEngineNone::class],
         ];
     }
 
@@ -38,6 +40,20 @@ final class MailEngineTest extends TestCase
     public function testEngineSelection(array $config, string $class): void
     {
         $this->assertInstanceOf($class, MailEngineFactory::create(self::FROM + $config));
+    }
+
+    public function testNoneNeedsNoSenderAndNeverSends(): void
+    {
+        $config = ['mail_engine' => ' none '];
+        $this->assertTrue(MailEngineFactory::isManual($config));
+        $engine = MailEngineFactory::create($config);
+        $this->assertInstanceOf(MailEngineNone::class, $engine);
+        $this->assertFalse($engine->send('alice@example.org', 'Subject', '<p>Hi</p>'));
+        $this->assertStringContainsString('mail_engine=none', $engine->lastError());
+
+        foreach ([[], ['mail_engine' => 'mail'], ['mail_engine' => 'smtp']] as $other) {
+            $this->assertFalse(MailEngineFactory::isManual($other));
+        }
     }
 
     public static function invalidConfigs(): array

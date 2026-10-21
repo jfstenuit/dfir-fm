@@ -185,6 +185,17 @@ final class MailTest extends FeatureTestCase
         $this->assertCount(1, $this->server->logEntries('mail_send_failure'));
     }
 
+    public function testSendTestMailCliWithMailDisabled(): void
+    {
+        $this->restartWith(['mail_engine' => 'none']);   // and no sender
+
+        $result = $this->server->runBin('send-test-mail.php', 'ops@example.org');
+        $this->assertSame(0, $result['exit'], $result['stderr']);
+        $this->assertStringContainsString('Mail is disabled', $result['stdout']);
+        $this->assertSame([], $this->server->sentMail());
+        $this->assertSame([], $this->server->logEntries('mail_send_failure'));
+    }
+
     public function testSendTestMailCliUsage(): void
     {
         foreach ([[], ['not-an-address'], ['a@example.org', 'b@example.org']] as $args) {

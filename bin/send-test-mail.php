@@ -6,7 +6,8 @@
 // Uses the mail settings from .env (mail_engine, smtp_*, sendgrid_api_key,
 // default_mail_from*), exactly as invitations do. Run it as the web server
 // user to also check its permissions (sendmail, .env readability).
-// Exit code 0 when the engine accepted the message, 1 otherwise.
+// Exit code 0 when the engine accepted the message, 1 otherwise. With
+// mail_engine=none nothing is sent: the script says so and exits 0.
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
@@ -31,7 +32,13 @@ $recipient = $argv[1];
 
 $config = Config::load(ENV_FILE);
 $logger = LogEngineFactory::create($config);
-$engineName = $config['mail_engine'] ?? 'mail';
+$engineName = MailEngineFactory::engineName($config);
+
+if (MailEngineFactory::isManual($config)) {
+    echo "Mail is disabled (mail_engine=none): nothing was sent.\n";
+    echo "Invitation links are shown to the administrator, who passes them on through another channel.\n";
+    exit(0);
+}
 
 $osUser = function_exists('posix_geteuid') ? (posix_getpwuid(posix_geteuid())['name'] ?? (string)posix_geteuid()) : get_current_user();
 $host = gethostname() ?: 'unknown host';

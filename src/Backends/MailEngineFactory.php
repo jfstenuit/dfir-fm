@@ -14,9 +14,23 @@ class MailEngineFactory {
         'none' => MailEnginePHPMailerSMTP::SECURE_NONE,
     ];
 
+    /** The configured engine name, lowercased; 'mail' when not set */
+    public static function engineName(array $config): string {
+        return strtolower(trim($config['mail_engine'] ?? '')) ?: 'mail';
+    }
+
+    /** mail_engine=none: invitation links are handed to the administrator, not sent */
+    public static function isManual(array $config): bool {
+        return self::engineName($config) === 'none';
+    }
+
     /** @throws \InvalidArgumentException on missing or invalid settings */
     public static function create(array $config): MailEngineInterface {
-        $engine = strtolower(trim($config['mail_engine'] ?? '')) ?: 'mail';
+        $engine = self::engineName($config);
+        if ($engine === 'none') {
+            // Nothing is sent: default_mail_from is not required
+            return new MailEngineNone();
+        }
 
         $from = trim($config['default_mail_from'] ?? '');
         if (!PHPMailer::validateAddress($from)) {
