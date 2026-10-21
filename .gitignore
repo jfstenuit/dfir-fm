@@ -49,10 +49,13 @@ composer.phar
 .env
 .phpunit.cache
 
-# AI assistant
+# AI assistant and own development environment
 .claude
 CLAUDE.md
 PLAN.md
+HISTORY.md
+NEXT_STEPS.md
+CODE_AUDIT.md
 
 # Storage location
 storage

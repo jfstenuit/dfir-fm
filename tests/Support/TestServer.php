@@ -144,11 +144,11 @@ final class TestServer
     }
 
     /** Put a file in storage and register it in directory '/' */
-    public function addFile(string $name, string $content): int
+    public function addFile(string $name, string $content, int $uploadedBy = 1): int
     {
         file_put_contents("$this->root/storage/files/$name", $content);
-        $stmt = $this->db()->prepare("INSERT INTO files (directory_id, name, size, sha256, uploaded_by) VALUES (1, :name, :size, :sha, 1)");
-        $stmt->execute([':name' => $name, ':size' => strlen($content), ':sha' => hash('sha256', $content)]);
+        $stmt = $this->db()->prepare("INSERT INTO files (directory_id, name, size, sha256, uploaded_by) VALUES (1, :name, :size, :sha, :by)");
+        $stmt->execute([':name' => $name, ':size' => strlen($content), ':sha' => hash('sha256', $content), ':by' => $uploadedBy]);
         return (int)$this->db()->lastInsertId();
     }
 

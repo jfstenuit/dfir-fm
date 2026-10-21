@@ -311,7 +311,7 @@ class AccessMiddleware
                 NULL AS size,
                 NULL AS sha256,
                 d.created_at,
-                u.username AS created_by,
+                COALESCE(u.username, 'unknown user #' || d.created_by) AS created_by,
                 d.created_from
             FROM directories d
             LEFT JOIN users u ON d.created_by = u.id
@@ -329,10 +329,10 @@ class AccessMiddleware
                 f.size AS size,
                 f.sha256 AS sha256,
                 f.uploaded_at AS created_at,
-                u.username AS created_by,
+                COALESCE(u.username, 'unknown user #' || f.uploaded_by) AS created_by,
                 f.uploaded_from AS created_from
             FROM files f
-            JOIN users u ON f.uploaded_by = u.id
+            LEFT JOIN users u ON f.uploaded_by = u.id
             WHERE f.directory_id = :directory_id
         ");
         $stmt->execute([':directory_id' => $directoryInfo['id']]);
@@ -391,7 +391,7 @@ class AccessMiddleware
                     NULL AS size,
                     NULL AS sha256,
                     d.created_at,
-                    u.username AS created_by,
+                    COALESCE(u.username, 'unknown user #' || d.created_by) AS created_by,
                     d.created_from
                 FROM directories d
                 LEFT JOIN users u ON d.created_by = u.id
@@ -413,10 +413,10 @@ class AccessMiddleware
                         f.size AS size,
                         f.sha256 AS sha256,
                         f.uploaded_at AS created_at,
-                        u.username AS created_by,
+                        COALESCE(u.username, 'unknown user #' || f.uploaded_by) AS created_by,
                         f.uploaded_from AS created_from
                     FROM files f
-                    JOIN users u ON f.uploaded_by = u.id
+                    LEFT JOIN users u ON f.uploaded_by = u.id
                     WHERE f.directory_id = :directory_id
                 ");
                 $stmt->execute([
@@ -432,10 +432,10 @@ class AccessMiddleware
                         f.size AS size,
                         f.sha256 AS sha256,
                         f.uploaded_at AS created_at,
-                        u.username AS created_by,
+                        COALESCE(u.username, 'unknown user #' || f.uploaded_by) AS created_by,
                         f.uploaded_from AS created_from
                     FROM files f
-                    JOIN users u ON f.uploaded_by = u.id
+                    LEFT JOIN users u ON f.uploaded_by = u.id
                     WHERE f.directory_id = :directory_id
                       AND f.uploaded_by = :user_id
                 ");

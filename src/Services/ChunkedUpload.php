@@ -567,7 +567,7 @@ final class ChunkedUpload
             $state['message'] = $upload['error'];
         }
         if ($upload['status'] === 'completed') {
-            $stmt = $this->db->prepare("SELECT f.id, f.name, f.size, f.sha256, f.uploaded_at, u.username AS uploaded_by, f.uploaded_from
+            $stmt = $this->db->prepare("SELECT f.id, f.name, f.size, f.sha256, f.uploaded_at, COALESCE(u.username, 'unknown user #' || f.uploaded_by) AS uploaded_by, f.uploaded_from
                                         FROM files f LEFT JOIN users u ON u.id = f.uploaded_by WHERE f.id = :id");
             $stmt->execute([':id' => $upload['file_id']]);
             $file = $stmt->fetch(PDO::FETCH_ASSOC);
