@@ -35,6 +35,30 @@ final class FactoryTest extends TestCase
         $this->assertInstanceOf(StorageEngineLocal::class, StorageEngineFactory::create(['base_storage_directory' => sys_get_temp_dir()]));
     }
 
+    public function testDatabaseAndLogInsideTheStorageAreReserved(): void
+    {
+        $app = sys_get_temp_dir() . '/dfirfm-factory-' . bin2hex(random_bytes(4));
+        mkdir("$app/storage", 0777, true);
+        try {
+            // The defaults: the database in storage/database, beside a file log
+            $engine = StorageEngineFactory::create(['base_storage_directory' => "$app/storage", 'log_file_path' => "$app/storage/app.log"], $app);
+            $this->assertSame(['/app.log', '/database', '/database/app.sqlite'], $engine->reservedPaths());
+            $this->assertTrue($engine->isReserved('/database/app.sqlite-journal'));
+            $this->assertFalse($engine->isReserved('/database.txt'));
+
+            // A log that is not a file, and a relative database path
+            $engine = StorageEngineFactory::create(['base_storage_directory' => "$app/storage", 'log_engine' => 'syslog',
+                                                   'log_file_path' => "$app/storage/app.log", 'database_path' => 'storage/app.sqlite'], $app);
+            $this->assertSame(['/app.sqlite'], $engine->reservedPaths(), 'the storage root itself is not reserved');
+
+            // Kept apart, as they should be
+            $engine = StorageEngineFactory::create(['base_storage_directory' => "$app/storage", 'database_path' => "$app/db/app.sqlite"], $app);
+            $this->assertSame([], $engine->reservedPaths());
+        } finally {
+            exec('rm -rf ' . escapeshellarg($app));
+        }
+    }
+
     public function testLocalWithoutDirectoryRefused(): void
     {
         $this->expectExceptionMessage('Invalid base directory');

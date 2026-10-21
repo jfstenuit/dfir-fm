@@ -55,7 +55,7 @@ final class DatabaseTest extends TestCase
     {
         $db = $this->init('fresh.sqlite');
 
-        $this->assertSame(6, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
         $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM users'), 'no seeded user');
         $this->assertSame(1, self::scalar($db, 'SELECT COUNT(*) FROM groups WHERE is_admin = 1'));
         $this->assertSame(['user_id', 'group_id'], $db->query('PRAGMA table_info(user_group)')->fetchAll(PDO::FETCH_COLUMN, 1));
@@ -146,7 +146,7 @@ final class DatabaseTest extends TestCase
         });
 
         $db = $this->init('v1.sqlite');
-        $this->assertSame(6, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
         $this->assertContains('client_uuid', $db->query('PRAGMA table_info(uploads)')->fetchAll(PDO::FETCH_COLUMN, 1));
         $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM uploads'), 'v1 uploads discarded');
         $this->assertSame(3, self::scalar($db, 'SELECT COUNT(*) FROM files'), 'files kept; NULL hashes may repeat');
@@ -165,7 +165,7 @@ final class DatabaseTest extends TestCase
         $db->exec("PRAGMA user_version = 2");
 
         $db = $this->init('v2.sqlite');
-        $this->assertSame(6, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
         $columns = $db->query('PRAGMA table_info(users)')->fetchAll(PDO::FETCH_COLUMN, 1);
         $this->assertContains('deleted_at', $columns);
         $this->assertContains('deleted_by', $columns);
@@ -185,10 +185,29 @@ final class DatabaseTest extends TestCase
         $db->exec("PRAGMA user_version = 5");
 
         $db = $this->init('v5.sqlite');
-        $this->assertSame(6, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
         $locked = $db->query("SELECT username FROM users WHERE locked_at IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
         $this->assertSame(['locked@example.org'], $locked, 'an expired invitation is not a lock');
         $this->assertSame(0, self::scalar($db, "SELECT COUNT(*) FROM users WHERE username = 'locked@example.org' AND invitation_token IS NOT NULL"));
+    }
+
+    public function testMigrationV7AddsFileOriginAndIntegrity(): void
+    {
+        $db = $this->init('v6.sqlite');
+        $db->exec("INSERT INTO files (directory_id, name, size, sha256) VALUES (1, 'old.bin', 3, 'abc')");
+        $db->exec("ALTER TABLE files DROP COLUMN origin");
+        $db->exec("ALTER TABLE files DROP COLUMN integrity");
+        $db->exec("ALTER TABLE files DROP COLUMN checked_at");
+        $db->exec("DROP TABLE refresh_job_files");
+        $db->exec("DROP TABLE refresh_jobs");
+        $db->exec("PRAGMA user_version = 6");
+
+        $db = $this->init('v6.sqlite');
+        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(['upload', null, null], $db->query("SELECT origin, integrity, checked_at FROM files")->fetch(PDO::FETCH_NUM), 'existing files were uploaded');
+        $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM refresh_jobs'));
+        $this->expectException(\PDOException::class);
+        $db->exec("UPDATE files SET integrity = 'fine'");
     }
 
     public function testMigrationV4RepairsReferencesToMissingRows(): void
@@ -209,7 +228,7 @@ final class DatabaseTest extends TestCase
         $db->exec("PRAGMA user_version = 3");
 
         $db = $this->init('v3.sqlite');
-        $this->assertSame(6, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
 
         // Tombstones for the missing uploader, creator and upload owner
         $tombstones = $db->query("SELECT id, username FROM users WHERE deleted_at IS NOT NULL ORDER BY id")->fetchAll(PDO::FETCH_KEY_PAIR);

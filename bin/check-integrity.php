@@ -11,6 +11,8 @@
 //     without a database record (e.g. partial uploads left by v1), symbolic
 //     links, special files and folders that can't be read
 //   - rows that refer to a missing row (PRAGMA foreign_key_check)
+//   - the database or the log file configured inside the storage (RESERVED,
+//     not counted as a problem: they are left out of the search for orphans)
 //
 // Read-only: it never changes the database or the storage. Run it as the web
 // server user. Exit status: 0 if everything matches, 1 if not, 2 on error.
@@ -84,6 +86,13 @@ foreach ($files as $file) {
     if ($stored['sha256'] !== $file['sha256']) {
         $report("HASH       $path (file id {$file['id']}): stored {$stored['sha256']}, recorded " . ($file['sha256'] ?? 'none'));
     }
+}
+
+// Left out of the walk below, and refused to uploads: not a problem of the
+// stored evidence, but the configuration should change
+if ($storage->reservedPaths()) {
+    echo "RESERVED   " . implode(', ', $storage->reservedPaths())
+        . ": the application's own files are inside the storage; move the database and the log file out of it (README, Installation)\n";
 }
 
 // Orphans need a folder tree to walk: a blob store has none

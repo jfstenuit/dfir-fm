@@ -19,13 +19,16 @@ class FileManagerController
     public static function handle($config,$db)
     {
         // File operations available to non-admin users; each one checks
-        // the caller's rights on the target directory itself.
+        // the caller's rights on the target directory itself. The refresh
+        // actions are for administrators (RefreshController checks).
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $action = trim($_POST['a'] ?? '');
             if ($action === 'createFolder') {
                 self::createDirectory($config, $db);
             } elseif ($action === 'deleteItem') {
                 self::deleteItem($config, $db);
+            } elseif (in_array($action, RefreshController::ACTIONS, true)) {
+                RefreshController::handle($config, $db, $action);
             } else {
                 header('Content-Type: application/json');
                 http_response_code(400);
@@ -188,6 +191,12 @@ class FileManagerController
         $accessRights = AccessMiddleware::checkAccess($db, $cwd, $userId);
         if (!$accessRights['can_write']) {
             echo json_encode(['success' => false, 'message' => 'Access denied to directory']);
+            return;
+        }
+
+        // The application's own files, if configured inside the storage
+        if (StorageEngineFactory::create($config)->isReserved($newDirPath)) {
+            echo json_encode(['success' => false, 'message' => 'This name is reserved in this folder: the application keeps its own files there.']);
             return;
         }
 

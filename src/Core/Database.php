@@ -128,6 +128,9 @@ class Database
     uploaded_from TEXT,
     size INTEGER NOT NULL DEFAULT (0),
     sha256 TEXT,
+    origin TEXT NOT NULL DEFAULT 'upload',
+    integrity TEXT CHECK (integrity IN ('mismatch', 'missing')),
+    checked_at DATETIME,
     FOREIGN KEY (uploaded_by) REFERENCES users(id),
     FOREIGN KEY (directory_id) REFERENCES directories(id)
             );",
@@ -163,7 +166,46 @@ class Database
     size INTEGER NOT NULL,
     PRIMARY KEY (upload_id, chunk_index),
     FOREIGN KEY (upload_id) REFERENCES uploads(id) ON DELETE CASCADE
-            );"
+            );",
+
+            // "Refresh from storage" (Services\RefreshJobs): one directory
+            // compared with its records, then its files hashed one per
+            // request. Kept once ended, for the audit trail.
+            "CREATE TABLE IF NOT EXISTS refresh_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    directory_id INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('in_progress', 'completed', 'canceled', 'expired')),
+    new_folders INTEGER NOT NULL DEFAULT 0,
+    missing INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    current_file TEXT,
+    hashed_bytes INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_update DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (directory_id) REFERENCES directories(id) ON DELETE CASCADE
+            );",
+
+            // The files of a job, in hashing order. file_id: the record of
+            // an existing file (no foreign key: deleting the file must stay
+            // possible during a refresh), NULL for a new one.
+            "CREATE TABLE IF NOT EXISTS refresh_job_files (
+    job_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    file_id INTEGER,
+    size INTEGER NOT NULL,
+    mtime INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'hashing', 'imported', 'verified', 'mismatch', 'skipped', 'failed')),
+    sha256 TEXT,
+    reason TEXT,
+    PRIMARY KEY (job_id, position),
+    FOREIGN KEY (job_id) REFERENCES refresh_jobs(id) ON DELETE CASCADE
+            );",
+
+            "CREATE INDEX IF NOT EXISTS refresh_jobs_active ON refresh_jobs(status, directory_id)"
         ];
 
         foreach ($queries as $query) {
@@ -222,6 +264,38 @@ class Database
 
         if ($version < 6) {
             self::migrateToV6();
+        }
+
+        if ($version < 7) {
+            self::migrateToV7();
+        }
+    }
+
+    /**
+     * v7 (Phase 13, refresh from storage): files.origin ('upload', or
+     * 'import' for a file found in storage), files.integrity (NULL, or the
+     * last refresh found it 'mismatch' or 'missing') and files.checked_at.
+     * The refresh_jobs tables come from createSchema().
+     */
+    private static function migrateToV7()
+    {
+        $db = self::$connection;
+        $db->exec("BEGIN IMMEDIATE");
+        try {
+            if ((int)$db->query("PRAGMA user_version")->fetchColumn() >= 7) {
+                $db->exec("COMMIT"); // another request migrated meanwhile
+                return;
+            }
+            if (!self::hasColumn('files', 'origin')) {
+                $db->exec("ALTER TABLE files ADD COLUMN origin TEXT NOT NULL DEFAULT 'upload'");
+                $db->exec("ALTER TABLE files ADD COLUMN integrity TEXT CHECK (integrity IN ('mismatch', 'missing'))");
+                $db->exec("ALTER TABLE files ADD COLUMN checked_at DATETIME");
+            }
+            $db->exec("PRAGMA user_version = 7");
+            $db->exec("COMMIT");
+        } catch (\Throwable $e) {
+            $db->exec("ROLLBACK");
+            throw $e;
         }
     }
 

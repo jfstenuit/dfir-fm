@@ -6,8 +6,9 @@
 // Uploads without activity for upload_stale_after seconds (default 86400)
 // are marked expired and their staging files deleted. The application does
 // this itself whenever an upload starts; this script is for a cron job, so
-// staging space is reclaimed even when nobody uploads. Run it as the web
-// server user.
+// staging space is reclaimed even when nobody uploads. Refreshes from
+// storage left unfinished for as long expire too. Run it as the web server
+// user.
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
@@ -25,6 +26,7 @@ use Core\Database;
 use Backends\LogEngineFactory;
 use Backends\StorageEngineFactory;
 use Services\ChunkedUpload;
+use Services\RefreshJobs;
 
 try {
     $config = Config::load(ENV_FILE);
@@ -34,10 +36,15 @@ try {
     App::setDb($db);
     App::setLogger($logger);
 
-    $expired = (new ChunkedUpload($db, StorageEngineFactory::create($config), $logger, $config))->expireStale();
+    $storage = StorageEngineFactory::create($config);
+    $expired = (new ChunkedUpload($db, $storage, $logger, $config))->expireStale();
+    $refreshes = (new RefreshJobs($db, $storage, $logger, $config))->expireStale();
 } catch (\Throwable $e) {
     fwrite(STDERR, 'Error: ' . $e->getMessage() . "\n");
     exit(1);
 }
 
 echo "$expired upload(s) expired.\n";
+if ($refreshes > 0) {
+    echo "$refreshes refresh(es) from storage expired.\n";
+}

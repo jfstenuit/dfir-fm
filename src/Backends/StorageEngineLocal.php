@@ -12,7 +12,18 @@ class StorageEngineLocal implements StorageEngineInterface
 
     private $baseDirectory;
 
-    public function __construct($baseDirectory) {
+    /** @var array<string,bool> Reserved paths relative to the base directory ('/database') => is a directory */
+    private array $reserved = [];
+
+    /**
+     * @param list<string> $reservedPaths Absolute paths of the application's
+     *   own files (the database, the log file), or of a directory with a
+     *   trailing slash (the database's). Those inside the base directory are
+     *   refused by every method and left out of listings: a directory with
+     *   its content, a file with the companion files put beside it (SQLite's
+     *   "-wal", "-shm", "-journal"; rotated logs ".1", ".2.gz").
+     */
+    public function __construct($baseDirectory, array $reservedPaths = []) {
         // Check before trimming: rtrim(false) would turn a failed realpath()
         // into '' and silently make '/' the storage root. An empty setting
         // must be refused too: realpath('') is the current directory.
@@ -23,7 +34,71 @@ class StorageEngineLocal implements StorageEngineInterface
         }
 
         $this->baseDirectory = rtrim($resolved, DIRECTORY_SEPARATOR);
+
+        foreach ($reservedPaths as $reservedPath) {
+            $reservedPath = (string)$reservedPath;
+            $relative = $this->relativeToBase($reservedPath);
+            if ($relative !== null && $relative !== '/') {
+                $this->reserved[$relative] = ($this->reserved[$relative] ?? false) || str_ends_with($reservedPath, '/');
+            }
+        }
+        ksort($this->reserved);
     }
+
+    /** An absolute path as a path inside the storage ('/a/b'), or null if outside */
+    private function relativeToBase(string $path): ?string
+    {
+        if (!str_starts_with($path, DIRECTORY_SEPARATOR)) {
+            return null;
+        }
+        // Resolve symbolic links as the base directory was, as far as the path exists
+        $existing = $path;
+        $rest = '';
+        while ($existing !== DIRECTORY_SEPARATOR && !file_exists($existing)) {
+            $rest = DIRECTORY_SEPARATOR . basename($existing) . $rest;
+            $existing = dirname($existing);
+        }
+        $resolved = $this->normalizePath((realpath($existing) ?: $existing) . $rest);
+        if ($resolved === $this->baseDirectory) {
+            return '/';
+        }
+        if (!str_starts_with($resolved, $this->baseDirectory . DIRECTORY_SEPARATOR)) {
+            return null;
+        }
+        return substr($resolved, strlen($this->baseDirectory));
+    }
+
+    /** Whether a normalized absolute path falls under a reserved path */
+    private function reservedAbsolute(string $absolutePath): bool
+    {
+        $relative = substr($absolutePath, strlen($this->baseDirectory));
+        foreach ($this->reserved as $reserved => $isDirectory) {
+            if ($relative === $reserved
+                || str_starts_with($relative, $reserved . '/')
+                || (!$isDirectory && (str_starts_with($relative, $reserved . '-') || str_starts_with($relative, $reserved . '.')))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public function isReserved(string $path): bool
+    {
+        try {
+            $this->validatePath($path);
+        } catch (\Exception $e) {
+            return $e->getCode() === self::RESERVED;
+        }
+        return false;
+    }
+
+    public function reservedPaths(): array
+    {
+        return array_keys($this->reserved);
+    }
+
+    /** Exception code of a path refused because it is reserved */
+    private const RESERVED = 1;
 
     /**
      * Normalize a path like realpath() but without requiring the target to exist.
@@ -80,6 +155,11 @@ class StorageEngineLocal implements StorageEngineInterface
         // Ensure the path stays within baseDirectory
         if (strpos($normalizedPath, $this->baseDirectory) !== 0) {
             throw new \Exception("Invalid path: $path. Directory traversal attempt detected.");
+        }
+
+        // The application's own files, if they were configured inside the storage
+        if ($this->reservedAbsolute($normalizedPath)) {
+            throw new \Exception("Reserved path: $path", self::RESERVED);
         }
 
         return $normalizedPath;
@@ -196,11 +276,12 @@ class StorageEngineLocal implements StorageEngineInterface
 
         $entries = [];
         foreach ($names as $name) {
+            $entryPath = $absolutePath . DIRECTORY_SEPARATOR . $name;
             if ($name === '.' || $name === '..'
-                || ($absolutePath === $this->baseDirectory && $name === self::STAGING_DIRECTORY)) {
+                || ($absolutePath === $this->baseDirectory && $name === self::STAGING_DIRECTORY)
+                || $this->reservedAbsolute($entryPath)) {
                 continue;
             }
-            $entryPath = $absolutePath . DIRECTORY_SEPARATOR . $name;
             // lstat: a symlink is reported, never followed
             $stat = @lstat($entryPath);
             $type = match (true) {

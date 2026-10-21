@@ -50,6 +50,13 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
      sudo chgrp www-data .env && chmod 640 .env
      ```
    - Edit the `.env` file to configure your settings (mail, storage directory, database and log paths, reverse proxy). The storage directory must exist; it and the directories of the database and the log file must be writable by the web server user and not web-accessible.
+   - **Keep the database and the log file out of the storage directory.** The storage directory holds the evidence and nothing else: give it a directory of its own, not a parent of the database's or the log's. Beware of the defaults: the database is `storage/database/app.sqlite` unless `database_path` says otherwise, so `base_storage_directory=storage` would put it inside. For example:
+     ```
+     base_storage_directory=/srv/dfir-fm/files
+     database_path=/srv/dfir-fm/database/app.sqlite
+     log_file_path=/var/log/dfir-fm/dfir-fm.log
+     ```
+     If they are inside anyway, the application protects them: their paths are reserved (uploads and new folders with those names are refused, and "Refresh from storage" doesn't offer to import them), and `bin/check-integrity.php` prints a `RESERVED` line. But an operator who copies, restores or re-hashes the storage then handles the live database and log along with the evidence. Moving them: stop the web server, move the files, update `.env`, start it again.
    - Check that the web server refuses `.env` (and the rest of the application's files): `.htaccess` blocks them, but only if Apache reads it (`AllowOverride All` for the application's directory, and `mod_rewrite` enabled):
      ```bash
      curl -s -o /dev/null -w '%{http_code}\n' https://your.host/dfir-fm/.env   # 404 (or 403) expected

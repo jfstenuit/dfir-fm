@@ -369,7 +369,8 @@ class AccessMiddleware
                 f.sha256 AS sha256,
                 f.uploaded_at AS created_at,
                 " . self::userLabel('f.uploaded_by') . " AS created_by,
-                f.uploaded_from AS created_from
+                f.uploaded_from AS created_from,
+                f.origin, f.integrity, f.checked_at
             FROM files f
             LEFT JOIN users u ON f.uploaded_by = u.id
             WHERE f.directory_id = :directory_id
@@ -453,7 +454,8 @@ class AccessMiddleware
                         f.sha256 AS sha256,
                         f.uploaded_at AS created_at,
                         " . self::userLabel('f.uploaded_by') . " AS created_by,
-                        f.uploaded_from AS created_from
+                        f.uploaded_from AS created_from,
+                        f.origin, f.integrity, f.checked_at
                     FROM files f
                     LEFT JOIN users u ON f.uploaded_by = u.id
                     WHERE f.directory_id = :directory_id
@@ -472,7 +474,8 @@ class AccessMiddleware
                         f.sha256 AS sha256,
                         f.uploaded_at AS created_at,
                         " . self::userLabel('f.uploaded_by') . " AS created_by,
-                        f.uploaded_from AS created_from
+                        f.uploaded_from AS created_from,
+                        f.origin, f.integrity, f.checked_at
                     FROM files f
                     LEFT JOIN users u ON f.uploaded_by = u.id
                     WHERE f.directory_id = :directory_id

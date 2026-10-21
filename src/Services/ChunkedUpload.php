@@ -556,6 +556,9 @@ final class ChunkedUpload
         if ($directory['path'] === '/' && $name === StorageEngineLocal::STAGING_DIRECTORY) {
             throw new UploadException(400, 'InvalidName', "The name \"$name\" is reserved in the root folder.");
         }
+        if ($this->storage->isReserved(self::joinPath($directory['path'], $name))) {
+            throw new UploadException(400, 'InvalidName', "The name \"$name\" is reserved in this folder: the application keeps its own files there.");
+        }
     }
 
     /** D2: same name in the target directory is refused, never overwritten or appended to */

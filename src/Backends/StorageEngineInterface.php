@@ -57,6 +57,21 @@ interface StorageEngineInterface
      */
     public function listDirectory(string $directory): array;
 
+    /**
+     * Whether a path belongs to the application's own files (the database,
+     * the log file) because they were configured inside the storage. Such
+     * paths are refused by every method and left out of listings.
+     */
+    public function isReserved(string $path): bool;
+
+    /**
+     * The reserved paths inside the storage (see isReserved), for warnings;
+     * empty when the database and the log are kept elsewhere, as they should be.
+     *
+     * @return list<string>
+     */
+    public function reservedPaths(): array;
+
     /*
      * Staging: an upload is assembled in a staging element, outside every
      * user-visible path, and only appears at its final path once complete

@@ -170,6 +170,50 @@ final class StorageEngineLocalTest extends TestCase
         (new StorageEngineLocal($this->dir))->listDirectory($path);
     }
 
+    public function testReservedPathsRefusedAndHidden(): void
+    {
+        mkdir("$this->dir/database");
+        file_put_contents("$this->dir/database/app.sqlite", 'db');
+        file_put_contents("$this->dir/database/app.sqlite-wal", 'wal');
+        file_put_contents("$this->dir/app.log", 'log');
+        file_put_contents("$this->dir/app.log.1", 'rotated');
+        file_put_contents("$this->dir/database.txt", 'evidence');   // beside a reserved directory: not reserved
+        file_put_contents("$this->dir/app.logbook", 'evidence');    // not a companion of app.log
+        $engine = new StorageEngineLocal($this->dir, [
+            "$this->dir/database/app.sqlite", "$this->dir/database/", "$this->dir/app.log",
+            '/var/log/elsewhere.log', "$this->dir/",                   // outside, and the root itself: ignored
+        ]);
+
+        $this->assertSame(['/app.log', '/database', '/database/app.sqlite'], $engine->reservedPaths());
+        $this->assertSame(['app.logbook', 'database.txt', 'file'], array_column($engine->listDirectory('/'), 'name'));
+        foreach (['/database', '/database/app.sqlite', '/database/app.sqlite-wal', '/database/new', '/app.log', '/app.log.1'] as $path) {
+            $this->assertTrue($engine->isReserved($path), $path);
+        }
+        foreach (['/database.txt', '/app.logbook', '/file', '/../etc/passwd'] as $path) {
+            $this->assertFalse($engine->isReserved($path), $path);
+        }
+
+        $this->assertFalse($engine->remove('/app.log'));
+        $this->assertFileExists("$this->dir/app.log");
+        $engine->stagingCreate(self::KEY);
+        try {
+            $engine->stagingCommit(self::KEY, '/database/new');
+            $this->fail('committed into a reserved directory');
+        } catch (\Exception $e) {
+            $this->assertStringContainsString('Reserved path', $e->getMessage());
+        }
+        $this->expectExceptionMessage('Reserved path');
+        $engine->readStream('/database/app.sqlite');
+    }
+
+    public function testReservedPathsThroughASymlinkedParent(): void
+    {
+        mkdir("$this->dir/real");
+        symlink("$this->dir/real", "$this->dir/alias");
+        $engine = new StorageEngineLocal("$this->dir/real", ["$this->dir/alias/app.sqlite"]);
+        $this->assertSame(['/app.sqlite'], $engine->reservedPaths());
+    }
+
     public function testHealthCheckLeavesTheRootAlone(): void
     {
         $engine = new StorageEngineLocal($this->dir);
