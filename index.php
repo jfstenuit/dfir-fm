@@ -13,6 +13,9 @@ define('ENV_FILE', BASE_PATH . '/.env');
 header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self';");
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
+// Pages and JSON answers hold case data and per-user state: never cached
+// (downloads replace it with their own private, no-store)
+header('Cache-Control: no-store');
 
 // Autoload classes
 require_once BASE_PATH . '/vendor/autoload.php';
@@ -57,6 +60,9 @@ App::setLogger($logEngine);
 
 // Start session management
 Session::start();
+
+// Behind a proxy that nobody told us about: say so in the log (and on the admin page)
+SecurityMiddleware::checkProxyConfiguration();
 
 // Basic routing logic
 $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);

@@ -65,7 +65,7 @@ class AdminController
         } else {
             // Render the admin view
             $users=[]; $groups=[]; $accessRights=[];
-            AdminView::render($users, $groups, $accessRights);
+            AdminView::render($users, $groups, $accessRights, SecurityMiddleware::proxyWarningActive());
         }
     }
 

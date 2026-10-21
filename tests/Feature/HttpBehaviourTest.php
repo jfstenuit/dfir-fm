@@ -31,6 +31,25 @@ final class HttpBehaviourTest extends FeatureTestCase
         $this->assertSecurityHeaders($bob->get(''), 'file manager');
     }
 
+    /** Pages, JSON answers and redirects are never cached; downloads keep their own private, no-store */
+    public function testNoStoreOnEveryResponse(): void
+    {
+        $bob = $this->bobClient();
+        $anonymous = $this->client();
+
+        $this->assertSame('no-store', $anonymous->get('login')->header('Cache-Control'), 'login page');
+        $this->assertSame('no-store', $anonymous->get('')->header('Cache-Control'), 'redirect to login');
+        $this->assertSame('no-store', $bob->get('')->header('Cache-Control'), 'file manager');
+        $json = $bob->postWithCsrf('', ['a' => 'bogus']);
+        $this->assertSame('application/json', explode(';', (string)$json->header('Content-Type'))[0], 'JSON answer');
+        $this->assertSame('no-store', $json->header('Cache-Control'), 'JSON answer');
+
+        $this->server->addFile('evidence.txt', 'content');
+        $download = $this->adminClient()->get('dl', ['query' => ['p' => '/evidence.txt']]);
+        $this->assertSame(200, $download->status);
+        $this->assertSame('private, no-store', $download->header('Cache-Control'), 'download');
+    }
+
     /** Only assets/ and the built files of the three front-end packages are served (tests/Support/router.php mirrors .htaccess) */
     public function testStaticFileAllowlist(): void
     {

@@ -56,6 +56,12 @@ class Request
         self::$trustedProxies = $networks;
     }
 
+    /** Whether any proxy is trusted (`trusted_proxies` not empty) */
+    public static function hasTrustedProxies(): bool
+    {
+        return self::$trustedProxies !== [];
+    }
+
     /**
      * IP address of the client, used for logging, rate limiting and forensic
      * records (e.g. uploaded_from).

@@ -10,7 +10,7 @@ use Views\Modals\InvitationLinkModal;
 
 class AdminView
 {
-    public static function render($users, $groups, $accessRights)
+    public static function render($users, $groups, $accessRights, bool $proxyWarning = false)
     {
         ?>
 <!DOCTYPE html>
@@ -69,6 +69,16 @@ class AdminView
       </div>
     </nav>
     <div class="tab-content pt-5">
+<?php if ($proxyWarning): ?>
+      <div id="proxyWarning" class="alert alert-warning" role="alert">
+        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+        <strong>Proxy not configured.</strong>
+        Requests arrive with an <code>X-Forwarded-For</code> header, but <code>trusted_proxies</code> is empty:
+        every client appears with the proxy's address (the login rate limit is shared by everyone, and uploads
+        record the proxy as their origin). Set <code>trusted_proxies</code> to the proxy's address in
+        <code>.env</code>, and <code>force_https=true</code> if TLS ends at the proxy.
+      </div>
+<?php endif; ?>
       <div class="tab-pane fade show active" id="usersTab">
         <!-- Users Table -->
         <table id="usersTable" class="table table-bordered table-striped table-hover table-sm">

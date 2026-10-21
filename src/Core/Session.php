@@ -11,6 +11,10 @@ class Session
             ini_set('session.use_strict_mode', '1');
             ini_set('session.use_only_cookies', '1');
             ini_set('session.use_trans_sid', '0');
+            // Caching headers are set by index.php (no-store on every
+            // response, private, no-store on downloads), not by PHP's default
+            // "nocache" limiter, which would overwrite them
+            session_cache_limiter('');
 
             // SameSite=Lax rather than Strict: Strict drops the cookie on
             // navigations coming from another site, which breaks invitation
