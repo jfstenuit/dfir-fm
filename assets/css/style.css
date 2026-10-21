@@ -176,3 +176,13 @@ table.sortable th[aria-sort="descending"] .sort-button::after {
     opacity: .7;
     font-size: .65em;
 }
+
+/* Markers after a file name: imported, differs from its record, missing (FileManagerView::fileFlags) */
+#main-table .file-flag {
+    margin-left: 0.35rem;
+}
+
+/* Refresh dialog: the hashing bar starts empty (filemanager.js sets the width; no inline style under the CSP) */
+#refreshBar {
+    width: 0;
+}

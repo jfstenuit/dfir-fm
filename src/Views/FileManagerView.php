@@ -9,10 +9,11 @@ use Views\Modals\UploadModal;
 use Views\Modals\InviteModal;
 use Views\Modals\AccessRightsModal;
 use Views\Modals\ProfileModal;
+use Views\Modals\RefreshModal;
 
 class FileManagerView
 {
-    public static function render($items,$cwd,$userPermissions)
+    public static function render($items,$cwd,$userPermissions,bool $canRefresh = false)
     {
         $e = fn($value) => htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
         ?>
@@ -60,6 +61,13 @@ class FileManagerView
           </a>
         </li>
         <?php endif; ?>
+        <?php if ($canRefresh) : ?>
+        <li class="nav-item">
+          <a title="Compare this folder with its content in storage" class="nav-link" href="#" data-bs-toggle="modal" data-bs-target="#refreshModal">
+              <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh
+          </a>
+        </li>
+        <?php endif; ?>
         <li class="nav-item">
           <a title="Access Rights" class="nav-link" href="#" data-bs-toggle="modal" data-bs-target="#accessRightsModal">
               <i class="bi bi-person-gear" aria-hidden="true"></i> Access Rights
@@ -104,11 +112,15 @@ class FileManagerView
 <?php foreach ($items as $i) {
   $path = urlencode(rtrim($cwd, '/') . '/' . $i['name']);
   $link = $i['type'] === 'd' ? "?p=$path" : "dl?p=$path";
+  $flags = self::fileFlags($i);
 ?>
-        <tr>
+        <tr<?php echo $flags['row'] ? ' class="' . $flags['row'] . '"' : ''; ?>>
           <td>
             <div class="filename">
               <a href="<?php echo $e($link); ?>"><?php if ($i['type'] === 'd') : ?><i class="bi bi-folder me-1" aria-hidden="true"></i><?php endif; ?><?php echo $e($i['name']); ?></a>
+<?php foreach ($flags['icons'] as [$glyph, $class, $title]) : ?>
+              <i class="bi bi-<?php echo $glyph; ?> file-flag <?php echo $class; ?>" title="<?php echo $e($title); ?>" role="img" aria-label="<?php echo $e($title); ?>"></i>
+<?php endforeach; ?>
             </div>
           </td>
           <td class="text-end" data-order="<?php echo $e($i['size']); ?>"><?php echo $e($i['size']); ?></td>
@@ -143,10 +155,40 @@ if ($cwd !== '/') {
     InviteModal::render($cwd);
 }
 ProfileModal::render($cwd);
+if ($canRefresh) {
+    RefreshModal::render($cwd);
+}
 ?>
 </body>
 </html>
         <?php
+    }
+
+    /**
+     * Markers of a file row: imported from storage, or found different
+     * from its record or missing by the last refresh (Phase 13).
+     *
+     * @return array{row: string, icons: list<array{string, string, string}>}
+     *   the row's class, and [Bootstrap icon, class, title] per marker
+     */
+    public static function fileFlags(array $item): array
+    {
+        $flags = ['row' => '', 'icons' => []];
+        if (($item['type'] ?? '') !== 'f') {
+            return $flags;
+        }
+        $checked = empty($item['checked_at']) ? '' : " (checked {$item['checked_at']} UTC)";
+        if (($item['integrity'] ?? null) === 'mismatch') {
+            $flags['row'] = 'table-danger file-mismatch';
+            $flags['icons'][] = ['exclamation-triangle-fill', 'text-danger', "The stored file differs from its record$checked: the recorded SHA-256 is the evidence"];
+        } elseif (($item['integrity'] ?? null) === 'missing') {
+            $flags['row'] = 'table-warning file-missing';
+            $flags['icons'][] = ['file-earmark-x', 'text-warning-emphasis', "Missing from storage$checked"];
+        }
+        if (($item['origin'] ?? 'upload') === 'import') {
+            $flags['icons'][] = ['box-arrow-in-down', 'text-secondary', 'Imported from storage (placed there outside the application)'];
+        }
+        return $flags;
     }
 }
 ?>

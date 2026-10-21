@@ -15,7 +15,7 @@ class UploadModal {
             <div class="modal-body">
                 <!-- Dropzone Form -->
                 <form id="fileUploader" action="upload" method="post" enctype="multipart/form-data">
-                    <input type="hidden" id="cwd" name="cwd" value="<?php echo rtrim($cwd, '/'); ?>">
+                    <input type="hidden" id="cwd" name="cwd" value="<?php echo htmlspecialchars(rtrim($cwd, '/'), ENT_QUOTES, 'UTF-8'); ?>">
                     <div class="dz-message">Drop files here or click to upload.</div>
                 </form>
             </div>

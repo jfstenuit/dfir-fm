@@ -1,5 +1,5 @@
 // assets/js/filemanager.js - The file manager page: listing, folders, uploads,
-// access rights, invitations, password change
+// access rights, invitations, password change, refresh from storage
 
 import Dropzone from '../../vendor/enyo/dropzone/dist/dropzone.mjs';
 import { api, h, icon, on, hideModal, showResultMessage, updatePassword, groupAutocomplete, copyField } from './utils.js';
@@ -51,6 +51,8 @@ export function init() {
     byId('addGroupForm')?.addEventListener('submit', addGroup);
     on('#groupAccessTableBody', 'change', 'input[type="checkbox"]', toggleRight);
     on('#groupAccessTableBody', 'click', '.remove-group', removeGroup);
+
+    initRefresh();
 }
 
 // ---------------------------------------------------------------------------
@@ -391,4 +393,247 @@ function setUploadStage(file, text) {
         preview.appendChild(stage);
     }
     stage.textContent = text;
+}
+
+// ---------------------------------------------------------------------------
+// Refresh from storage (administrators; protocol in RefreshController)
+// ---------------------------------------------------------------------------
+
+const refresh = {
+    running: false,     // a job of this page is in progress
+    stopping: false,    // Stop pressed: the job is canceled on the server
+    started: false,     // records may have changed: the listing reloads when the dialog closes
+    id: null,           // the job's refresh_id
+    after: 0,           // highest file position shown (refreshStatus' `after`)
+};
+
+const RESULTS = {
+    pending: ['Waiting', 'text-bg-light'],
+    hashing: ['Hashing…', 'text-bg-info'],
+    imported: ['Imported', 'text-bg-success'],
+    verified: ['Verified', 'text-bg-success'],
+    mismatch: ['Differs from record', 'text-bg-danger'],
+    skipped: ['Skipped', 'text-bg-secondary'],
+    failed: ['Failed', 'text-bg-danger'],
+};
+
+function initRefresh() {
+    const modal = byId('refreshModal');
+    if (!modal) return;
+    byId('refreshStartButton').addEventListener('click', startRefresh);
+    byId('refreshCancelButton').addEventListener('click', stopRefresh);
+    modal.addEventListener('show.bs.modal', () => { if (!refresh.running) resetRefresh(); });
+    // The records changed: show them
+    modal.addEventListener('hidden.bs.modal', () => { if (refresh.started) window.location.reload(); });
+    // Leaving the page doesn't stop the server's step, but nothing would start the next one
+    window.addEventListener('beforeunload', event => { if (refresh.running) event.preventDefault(); });
+}
+
+function resetRefresh() {
+    Object.assign(refresh, { running: false, stopping: false, started: false, id: null, after: 0 });
+    byId('refreshIntro').classList.remove('d-none');
+    for (const id of ['refreshSummary', 'refreshMissing', 'refreshSkipped', 'refreshProgress', 'refreshOutcome', 'refreshResults']) {
+        byId(id).classList.add('d-none');
+    }
+    byId('refreshResults').tBodies[0].replaceChildren();
+    byId('refreshStartButton').classList.remove('d-none');
+    setRefreshRunning(false);
+}
+
+/** While running, the dialog can only be stopped, not closed */
+function setRefreshRunning(running) {
+    refresh.running = running;
+    byId('refreshCloseButton').classList.toggle('d-none', running);
+    byId('refreshCloseX').classList.toggle('d-none', running);
+    const stop = byId('refreshCancelButton');
+    stop.classList.toggle('d-none', !running);
+    stop.disabled = false;
+}
+
+async function startRefresh() {
+    byId('refreshStartButton').classList.add('d-none');
+    byId('refreshIntro').classList.add('d-none');
+    setRefreshRunning(true);
+
+    let state;
+    try {
+        state = await api('./', { data: { a: 'refresh', cwd: currentDirectory() } });
+    } catch (error) {
+        setRefreshRunning(false);
+        showRefreshOutcome(error.message, 'danger');
+        return;
+    }
+    refresh.started = true;
+    refresh.id = state.refresh_id;
+    showComparison(state);
+    try {
+        state = await followRefresh(state);
+    } catch (error) {
+        setRefreshRunning(false);
+        showRefreshOutcome(error.message, 'danger');
+        return;
+    }
+    setRefreshRunning(false);
+    showRefreshEnd(state);
+}
+
+/** The comparison: what was recorded at once, and the files to hash (one row each, by position) */
+function showComparison(state) {
+    const { comparison: c, counts } = state;
+    const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+    const parts = [`${plural(c.new_files.length, 'file')} to import, ${plural(c.existing_files.length, 'file')} to verify.`];
+    if (c.new_folders.length) {
+        parts.unshift(`${plural(counts.new_folders, 'new folder')} recorded: ${c.new_folders.join(', ')}.`);
+    }
+    byId('refreshCounts').textContent = parts.join(' ');
+
+    const missing = byId('refreshMissing');
+    missing.replaceChildren(...(c.missing_files.length ? [
+        h('strong', {}, `Missing from storage (${c.missing_files.length}): `),
+        c.missing_files.map(f => f.name).join(', '),
+        '. Their records are kept and flagged.'] : []));
+    missing.classList.toggle('d-none', !c.missing_files.length);
+
+    const skipped = byId('refreshSkipped');
+    skipped.replaceChildren(...(c.skipped.length ? [
+        h('strong', {}, `Ignored in storage (${c.skipped.length}):`),
+        h('ul', { class: 'mb-0' }, c.skipped.map(entry => h('li', {}, h('code', {}, entry.name), ` — ${entry.reason}`)))] : []));
+    skipped.classList.toggle('d-none', !c.skipped.length);
+    byId('refreshSummary').classList.remove('d-none');
+
+    const rows = [...c.new_files.map(f => [f, 'new']), ...c.existing_files.map(f => [f, 'existing'])]
+        .map(([file, kind], index) => h('tr', { dataset: { position: index + 1 } },
+            h('td', { class: 'text-break' }, file.name, kind === 'new' ? h('span', { class: 'text-secondary' }, ' (new)') : null),
+            h('td', { class: 'text-end text-nowrap' }, file.size.toLocaleString('en')),
+            h('td', { class: 'refresh-result' }, resultBadge('pending'))));
+    byId('refreshResults').tBodies[0].replaceChildren(...rows);
+    byId('refreshResults').classList.toggle('d-none', !rows.length);
+}
+
+const resultBadge = status => h('span', { class: `badge ${RESULTS[status]?.[1] ?? 'text-bg-light'}` }, RESULTS[status]?.[0] ?? status);
+
+/** One file's result in its row (each position once: steps and polls may both report it) */
+function showFileResult(file) {
+    const row = byId('refreshResults').querySelector(`tr[data-position="${file.position}"]`);
+    refresh.after = Math.max(refresh.after, file.position);
+    if (!row) return;
+    const cell = row.querySelector('.refresh-result');
+    cell.replaceChildren(resultBadge(file.status));
+    if (file.reason) {
+        cell.append(h('div', { class: 'small text-secondary' }, file.reason));
+    } else if (file.sha256) {
+        cell.append(h('div', { class: 'small text-secondary checksum', title: file.sha256 }, file.sha256));
+    }
+}
+
+function showProgress(state) {
+    const box = byId('refreshProgress');
+    box.classList.toggle('d-none', state.status !== 'in_progress' || !state.total);
+    const done = state.total - state.counts.remaining;
+    byId('refreshFileCount').textContent = `${done} / ${state.total} files`;
+    const current = state.current;
+    const percent = current?.size ? Math.floor(100 * current.hashed_bytes / current.size) : 0;
+    byId('refreshCurrent').textContent = current ? `Hashing ${current.name}… ${percent}%` : '';
+    byId('refreshBar').style.width = `${current ? percent : 0}%`;
+    box.querySelector('.progress').setAttribute('aria-valuenow', String(current ? percent : 0));
+    if (current) {
+        const row = byId('refreshResults').querySelector(`tr[data-position] .refresh-result .badge.text-bg-light`);
+        row?.replaceWith(resultBadge('hashing'));
+    }
+}
+
+/** The job's state, with the results not shown yet */
+async function pollRefresh(id) {
+    const state = await api('./', { data: { a: 'refreshStatus', refresh_id: id, after: refresh.after } });
+    state.files.forEach(showFileResult);
+    showProgress(state);
+    return state;
+}
+
+/**
+ * Run the job's steps one after the other. A step runs for as long as its
+ * file takes to hash; polls show the progress meanwhile. If a step's request
+ * is cut (proxy timeout, network), the step goes on on the server: the polls
+ * follow it, then the next step starts (or waits, `busy`, while it ends).
+ */
+async function followRefresh(state) {
+    const id = state.refresh_id;
+    showProgress(state);
+    let failures = 0;
+    while (state.status === 'in_progress' && !refresh.stopping) {
+        let settled = false;
+        const step = api('./', { data: { a: 'refreshStep', refresh_id: id } })
+            .then(result => result, error => { if (error.status >= 400 && error.status < 500) throw error; return null; })
+            .finally(() => { settled = true; });
+        step.catch(() => {}); // awaited below
+
+        while (!settled) {
+            await Promise.race([sleep(1000), step.catch(() => {})]);
+            if (settled) break;
+            try {
+                state = await pollRefresh(id);
+                failures = 0;
+            } catch (error) {
+                if (error.status >= 400 && error.status < 500) throw error;
+            }
+        }
+
+        const result = await step;
+        if (result) {
+            failures = 0;
+            state = result;
+            if (result.file) showFileResult(result.file);
+            showProgress(state);
+            if (result.busy) await sleep(1000);
+            continue;
+        }
+        // The request was cut: the server's step goes on
+        await sleep(1000);
+        try {
+            state = await pollRefresh(id);
+            failures = 0;
+        } catch (error) {
+            if (error.status >= 400 && error.status < 500) throw error;
+            if (++failures >= 30) throw new Error('Lost contact with the server during the refresh.');
+        }
+    }
+    // Stopped, or ended: the last results
+    return pollRefresh(id);
+}
+
+async function stopRefresh() {
+    const button = byId('refreshCancelButton');
+    button.disabled = true;
+    refresh.stopping = true;
+    try {
+        await api('./', { data: { a: 'refreshCancel', refresh_id: refresh.id } });
+    } catch (error) {
+        showResultMessage('Could not stop the refresh: ' + error.message, false);
+    }
+}
+
+function showRefreshEnd(state) {
+    byId('refreshProgress').classList.add('d-none');
+    const c = state.counts;
+    const found = [
+        `${c.imported} imported`, `${c.verified} verified`,
+        c.mismatches ? `${c.mismatches} differ from their record` : null,
+        c.missing ? `${c.missing} missing` : null,
+        c.skipped ? `${c.skipped} skipped` : null,
+        c.failed ? `${c.failed} failed` : null,
+    ].filter(Boolean).join(', ');
+    const trouble = c.mismatches || c.missing || c.failed;
+    if (state.status === 'completed') {
+        showRefreshOutcome(`Refresh completed: ${found}.`, trouble ? 'warning' : 'success');
+    } else if (state.status === 'canceled') {
+        showRefreshOutcome(`Refresh stopped: ${found}; ${c.remaining} file(s) not processed, left as they are.`, 'secondary');
+    } else {
+        showRefreshOutcome(`Refresh ${state.status}: ${found}.`, 'secondary');
+    }
+}
+
+function showRefreshOutcome(text, kind) {
+    const outcome = byId('refreshOutcome');
+    outcome.className = `alert alert-${kind} py-2`;
+    outcome.textContent = text;
 }

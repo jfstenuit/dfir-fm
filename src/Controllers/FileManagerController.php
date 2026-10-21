@@ -56,8 +56,12 @@ class FileManagerController
         $items = AccessMiddleware::getDirectoryItems($db, $userId, $directoryInfo);
 
         $accessRights = AccessMiddleware::checkAccess($db, $currentPath, $userId);
+
+        // "Refresh from storage": administrators, on an engine with named files
+        $canRefresh = !empty($accessRights['is_admin']) && StorageEngineFactory::create($config)->supportsNamedFiles();
+
         // Render the file manager view
-        FileManagerView::render($items, $currentPath, $accessRights);
+        FileManagerView::render($items, $currentPath, $accessRights, $canRefresh);
     }
 
     public static function deleteItem($config,$db) {

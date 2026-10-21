@@ -75,6 +75,54 @@ final class RefreshTest extends FeatureTestCase
         }
     }
 
+    public function testButtonAndDialogForAdministratorsOnly(): void
+    {
+        $this->server->grantRootAccess(TestServer::BOB);
+        $adminPage = $this->adminClient()->get('')->body;
+        $this->assertStringContainsString('data-bs-target="#refreshModal"', $adminPage);
+        $this->assertStringContainsString('id="refreshModal"', $adminPage);
+
+        $bobPage = $this->bobClient()->get('')->body;
+        $this->assertStringNotContainsString('refreshModal', $bobPage);
+    }
+
+    public function testListingMarksImportedMismatchedAndMissingFiles(): void
+    {
+        $db = $this->server->db();
+        $this->server->addFile('imported.bin', 'a');
+        $this->server->addFile('tampered.bin', 'b');
+        $this->server->addFile('gone.bin', 'c');
+        $this->server->addFile('plain.bin', 'd');
+        $db->exec("UPDATE files SET origin = 'import' WHERE name = 'imported.bin'");
+        $db->exec("UPDATE files SET integrity = 'mismatch', checked_at = '2026-10-21 18:00:00' WHERE name = 'tampered.bin'");
+        $db->exec("UPDATE files SET integrity = 'missing' WHERE name = 'gone.bin'");
+
+        $page = $this->adminClient()->get('')->body;
+        $row = function (string $name) use ($page): string {
+            $this->assertMatchesRegularExpression('#<tr[^>]*>(?:(?!</tr>).)*' . preg_quote($name, '#') . '#s', $page);
+            preg_match('#<tr([^>]*)>((?:(?!</tr>).)*>' . preg_quote($name, '#') . '</a>(?:(?!</tr>).)*)</tr>#s', $page, $m);
+            return $m[0] ?? '';
+        };
+        $this->assertStringContainsString('bi-box-arrow-in-down', $row('imported.bin'));
+        $this->assertStringContainsString('table-danger file-mismatch', $row('tampered.bin'));
+        $this->assertStringContainsString('checked 2026-10-21 18:00:00 UTC', $row('tampered.bin'));
+        $this->assertStringContainsString('table-warning file-missing', $row('gone.bin'));
+        $this->assertStringNotContainsString('file-flag', $row('plain.bin'));
+    }
+
+    public function testImportedFolderNameIsEscapedInThePage(): void
+    {
+        // Allowed by the folder rules (no < > &), and now able to come from storage
+        $name = 'x" autofocus onfocus="alert(1)';
+        mkdir($this->server->root . "/storage/files/$name");
+        $admin = $this->adminClient();
+        $this->assertSame([$name], $admin->postWithCsrf('', ['a' => 'refresh', 'cwd' => '/'])->json()['comparison']['new_folders']);
+
+        $page = $admin->get('?p=' . urlencode("/$name"))->body;
+        $this->assertStringNotContainsString('x" autofocus', $page, 'no quote left unescaped');
+        $this->assertStringContainsString('value="/x&quot; autofocus onfocus=&quot;alert(1)"', $page);
+    }
+
     public function testCsrfRequired(): void
     {
         $response = $this->adminClient()->post('', ['a' => 'refresh', 'cwd' => '/']);
