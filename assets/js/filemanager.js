@@ -28,6 +28,9 @@ export function init() {
     // The dialogs' buttons submit their forms: Enter in a field does the same
     byId('newFolderForm')?.addEventListener('submit', createFolder);
     byId('inviteForm')?.addEventListener('submit', sendInvite);
+    byId('copyInviteLink')?.addEventListener('click', copyInviteLink);
+    // A manual invitation link is shown once: gone when the dialog closes
+    byId('inviteModal')?.addEventListener('hidden.bs.modal', () => showInviteLink(null));
     byId('profileForm')?.addEventListener('submit', event => {
         event.preventDefault();
         updatePassword();
@@ -121,6 +124,11 @@ async function deleteItem() {
 // Invitations
 // ---------------------------------------------------------------------------
 
+/**
+ * Invite into the current folder (never the root, D14). Mail: the dialog
+ * closes. mail_engine=none (data-manual): the link comes back in the answer
+ * and stays in the dialog until it closes, to be copied and passed on.
+ */
 async function sendInvite(event) {
     event.preventDefault();
     const emailInput = byId('inviteEmail');
@@ -129,19 +137,49 @@ async function sendInvite(event) {
         showResultMessage('Email address cannot be empty.', false);
         return;
     }
-    const accessRights = [...document.querySelectorAll('#inviteForm input[name="accessRights[]"]:checked')].map(box => box.value);
-    if (accessRights.length === 0) {
-        showResultMessage('Select at least one access right.', false);
-        return;
-    }
+    const button = byId('sendInviteButton');
+    button.disabled = true;
+    showInviteLink(null);
     try {
-        await api('admin', { data: { a: 'invite', cwd: currentDirectory(), email, accessRights, sendLink: byId('sendLink').checked } });
-        await hideModal('#inviteModal');
+        const response = await api('admin', { data: {
+            a: 'invite', cwd: currentDirectory(), email, addToDefaultGroup: byId('addToDefaultGroup').checked,
+        }});
         emailInput.value = '';
-        showResultMessage('Invitation sent.', true);
+        if (response?.link) {
+            showInviteLink(response.link);
+        } else {
+            await hideModal('#inviteModal');
+            showResultMessage(response?.message || 'Invitation sent.', true);
+        }
     } catch (error) {
         showResultMessage(error.message, false);
+    } finally {
+        button.disabled = false;
     }
+}
+
+/** Show a manual invitation link in the dialog, or clear it (null) */
+function showInviteLink(link) {
+    const input = byId('inviteLink');
+    if (!input) return;
+    input.value = link ?? '';
+    byId('inviteLinkResult').classList.toggle('d-none', !link);
+    if (link) input.select();
+}
+
+/** Feedback stays in the dialog: the result dialog can't open over it */
+async function copyInviteLink() {
+    const input = byId('inviteLink');
+    const button = byId('copyInviteLink');
+    try {
+        await navigator.clipboard.writeText(input.value);
+        button.replaceChildren(icon('check-lg'), ' Copied');
+    } catch {
+        // No clipboard access (plain http, permission): the link is selected for Ctrl+C
+        input.select();
+        button.replaceChildren(icon('clipboard'), ' Press Ctrl+C');
+    }
+    setTimeout(() => button.replaceChildren(icon('clipboard'), ' Copy'), 2000);
 }
 
 // ---------------------------------------------------------------------------

@@ -236,7 +236,7 @@ The logger is globally available via `App::getLogger()` and all controller-level
 - Uploads: `upload_start`, `upload_verifying`, `upload_completed` (with size and SHA-256), `upload_name_conflict`, `upload_duplicate_refused`, `upload_denied`, `upload_chunk_rejected`, `upload_failed`, `upload_aborted`, `upload_expired`, `upload_verify_restarted`
 - Downloads: `download_success`, `download_partial`, `download_failure`
 - Folders and files: `directory_created`, `directory_deleted`, `file_deleted`, `filemanager_failure` (a missing folder requested)
-- Administration: `user_invited` (with `invitation_sent`), `user_locked`, `user_deleted` (with `target_user_id` and `pseudonym`), `group_created`, `group_deleted` (with the number of `members` it had), `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
+- Administration: `user_invited` (with `directory`, the `group` joined or null, `delivery`: `mail` or `manual`, and `invitation_sent`; the link itself is never logged), `invitation_resent` (same fields, without group), `user_locked`, `user_deleted` (with `target_user_id` and `pseudonym`), `group_created` (with `default_group_of` when an invitation created it), `group_deleted` (with the number of `members` it had), `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
 - Mail failures: `mail_send_failure`
 - Command line: `cli_admin_created` (`bin/create-admin.php`, also when it resets a password), `cli_test_mail_sent` and `cli_deleted_user_lookup` (with `address_hash` and the account ids found), with `username` set to `cli:` + the system user; `upload_expired` from `bin/expire-uploads.php`, without a username
 
@@ -259,19 +259,20 @@ Access rights :
 - `AccessMiddleware::isAdmin()` is the single admin check. It queries the database on every request (no session cache), so revoking admin membership takes effect immediately
 - every action of `AdminController` is admin-only (one guard at the top of `handle()`). File operations open to regular users (`createFolder`, `deleteItem`) live in `FileManagerController` (`POST /`, field `a`) and check the caller's rights on the target directory
 - safeguards: the admin group can't be deleted, an admin can't lock or delete their own account, and the last active administrator can't be removed, locked or deleted
+- **default groups** (D15, D20, D21): every subfolder can have one, named `<folder path> contributors` (the full path: two `evidence` folders under different cases get two groups). `AccessMiddleware::defaultGroupFor()` finds the group of that name, or `… contributors (n)`, that has an `access_rights` row on the folder. A group of that name with rights only elsewhere (left by a rename, or by a deleted folder of the same path) is never reused; a new group then takes the next free number. A group created this way gets upload access only (contributors see only their own uploads). Default groups are otherwise ordinary groups: an administrator may change their rights or delete them (a deleted one is created again at the next invitation into the folder). Invitations never set or change a group's rights
 
 ### 1. **User Management**
 | Feature | Description | Location |
 |--------|-------------|-------------|
 | 🧑 View Users | List all users, their groups and their status (active: a password or a valid invitation; otherwise locked) | Admin UI, Users tab |
 | ➕ Create User | Not available: a contributor is created by inviting them. Administrators are created with `bin/create-admin.php` | — |
-| ✉️ Invite User | Creates the user, adds them to the group `<their e-mail domain> users`, gives that group the chosen rights on the current folder and optionally e-mails a link to a page where they set their password (valid one hour, single use) | File Manager UI (admins), Invite dialog |
-| 🔁 Resend Invitation | A new invitation link | Admin UI, Users tab |
+| ✉️ Invite User | Into the current folder, never the root (D14; the Invite link is hidden there). Creates the account if needed and, unless "Add to the default group of this folder" is unticked, adds it to that folder's default group (created with upload access if missing). Always delivers a link to a page where the invitee sets their password (single use, one hour): by e-mail, or with `mail_engine=none` shown once in the dialog, with a Copy button, to pass on through another channel | File Manager UI (admins), Invite dialog |
+| 🔁 Resend Invitation | A new link, to `/`; never touches groups or rights. With `mail_engine=none` the link is in the answer (shown in the admin page from Phase 10 Step 4) | Admin UI, Users tab |
 | 👥 Group memberships | Add or remove a user's groups | Admin UI, Users tab |
 | 🔒 Lock User | Makes the password and any pending invitation unusable | Admin UI, Users tab |
 | 🗑️ Delete User | Disables the account for good and replaces its address by a pseudonym (see *Deleted accounts*). Its files, folders and log entries are kept | Admin UI, Users tab |
 
-Changing a user's name or e-mail address isn't available. The invitation workflow is under review (#22).
+Changing a user's name or e-mail address isn't available. There is no invitation form in the admin page (D22): invitations are made from the folder they are for.
 
 #### Deleted accounts
 
@@ -493,9 +494,9 @@ Mail is only used for invitation links. `MailEngineFactory::create()` reads the 
 - `mail` (default): PHPMailer with `isMail()`, i.e. the local sendmail binary. PHPMailer encodes headers and rejects header injection; `default_mail_from` is also the envelope sender (`-f`).
 - `smtp`: PHPMailer over SMTP. `smtp_secure=none|starttls|smtps`. Not set means `none` (plain SMTP, no opportunistic STARTTLS), except on port 465, which gets `smtps`. `starttls` is required, not opportunistic: the send fails if the server doesn't offer it. Authentication only when `smtp_user` is set. `SMTPDebug` stays at 0: its output would end up in the HTTP response, and from level 2 it includes the `AUTH` exchange.
 - `sendgrid`: SendGrid Web API v3. An HTTP status ≥ 400 counts as a failure, with SendGrid's error body in the reason.
-- `none`: no mail, for hosts that cannot send any (air-gapped, no relay). `default_mail_from` is not required. `MailEngineFactory::isManual()` tells callers that the link is to be handed to the administrator instead (the invitation dialog does so from Phase 10 Step 3 of `PLAN.md`; until then an invitation with `none` reports a send failure). `MailEngineNone::send()` always returns `false`, so a caller that skips the check fails visibly. `bin/send-test-mail.php` says that mail is disabled and exits 0.
+- `none`: no mail, for hosts that cannot send any (air-gapped, no relay). `default_mail_from` is not required. `MailEngineFactory::isManual()` tells callers that the link is to be handed to the administrator instead (the invite dialog shows it with a Copy button; the answer carries `Cache-Control: no-store`). `MailEngineNone::send()` always returns `false`, so a caller that skips the check fails visibly. `bin/send-test-mail.php` says that mail is disabled and exits 0.
 
-All engines send UTF-8 HTML with a plain-text alternative (`MailText::fromHtml()`), from `default_mail_from` / `default_mail_from_name`. `send()` returns `false` on failure and `lastError()` gives the reason; it doesn't throw. The caller logs failures as `mail_send_failure` (recipient, engine, error). An invitation whose e-mail fails still creates the contributor; the admin gets `success: false` with a generic message, and the details go to the log only.
+All engines send UTF-8 HTML with a plain-text alternative (`MailText::fromHtml()`), from `default_mail_from` / `default_mail_from_name`. `send()` returns `false` on failure and `lastError()` gives the reason; it doesn't throw. The caller logs failures as `mail_send_failure` (recipient, engine, error). Invitations go through `AdminController::deliverInvitation()`, which issues the token and either mails the link or returns it. An invitation whose e-mail fails still creates the contributor; the admin gets `success: false` with a generic message, and the details go to the log only.
 
 ### Storage engine
 

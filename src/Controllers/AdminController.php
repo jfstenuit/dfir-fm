@@ -67,126 +67,114 @@ class AdminController
         }
     }
 
+    /**
+     * Invite a contributor into a subfolder (D14): create the account if
+     * needed, add it to the folder's default group unless unticked (D15,
+     * D21), then deliver a link (deliverInvitation). Never sets or changes
+     * a group's rights.
+     */
     public static function inviteUser($config, $db) {
         header('Content-Type: application/json');
 
-        $email = trim((string)($_POST['email'] ?? ''));
-        $cwd = trim($_POST['cwd'] ?? '/');
-        $userId = $_SESSION['user_id'];
-        $sendLink = isset($_POST['sendLink']) && $_POST['sendLink'] === 'true';
-        $accessRights = $_POST['accessRights'] ?? [];
-    
-        // Validate email syntax
+        $email = trim(is_string($_POST['email'] ?? null) ? $_POST['email'] : '');
+        $cwd = trim(is_string($_POST['cwd'] ?? null) ? $_POST['cwd'] : '');
+        $joinDefaultGroup = ($_POST['addToDefaultGroup'] ?? '') === 'true';
+
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
             echo json_encode(['success' => false, 'message' => 'Invalid email address']);
             return;
         }
-    
-        // Validate cwd (should exist)
-        $directoryInfo = AccessMiddleware::getDirectoryInfo($db, $cwd);
-        if (!$directoryInfo) {
+        if ($cwd === '' || $cwd === '/') {
+            echo json_encode(['success' => false, 'message' => 'Invitations are made into a subfolder, not into the root: open the folder first.']);
+            return;
+        }
+        if (!AccessMiddleware::getDirectoryInfo($db, $cwd)) {
             echo json_encode(['success' => false, 'message' => 'Invalid target directory']);
             return;
         }
-        $directoryId = $directoryInfo['id'];
 
-        // Get User ID - create if user not found
-        $invitedUserInfo = AccessMiddleware::getUserInfo($db, $email, true);
-        if (!$invitedUserInfo) {
-            echo json_encode(['success' => false, 'message' => 'Could not create user']);
-            return;
-        }
-        $invitedUserId = $invitedUserInfo['id'];
-
-        // Find or create a group for the user's domain
-        $domain = substr(strrchr($email, "@"), 1);
-        $groupName = $domain . ' users';
-
-        $stmt = $db->prepare("INSERT OR IGNORE INTO groups (name) VALUES (:name)");
-        $stmt->execute([':name' => $groupName]);
-
-        $stmt = $db->prepare("SELECT id FROM groups WHERE name = :name");
-        $stmt->execute([':name' => $groupName]);
-        $groupID = $stmt->fetchColumn();
-
-        if (!$groupID) {
-            echo json_encode(['success' => false, 'message' => 'Could not find or create group']);
-            return;
+        $db->exec('BEGIN IMMEDIATE');
+        try {
+            $invitee = AccessMiddleware::getUserInfo($db, $email, true);
+            $group = null;
+            if ($joinDefaultGroup) {
+                $group = AccessMiddleware::defaultGroupFor($db, $cwd);
+                AccessMiddleware::addUserToGroup($db, $invitee['id'], $group['id']);
+            }
+            $db->exec('COMMIT');
+        } catch (\Throwable $e) {
+            $db->exec('ROLLBACK');
+            throw $e;
         }
 
-        // Add user to that group
-        $stmt = $db->prepare("
-            INSERT OR IGNORE INTO user_group (user_id, group_id) VALUES (:user_id, :group_id)
-        ");
-        $stmt->execute([
-            ':user_id' => $invitedUserId,
-            ':group_id' => $groupID
-        ]);
-
-        // Grant access to group on directory
-        $stmt = $db->prepare("
-            INSERT OR IGNORE INTO access_rights (directory_id, group_id) VALUES (:dir_id, :group_id)
-        ");
-        $stmt->execute([
-            ':dir_id' => $directoryId,
-            ':group_id' => $groupID
-        ]);
-        $stmt = $db->prepare("
-            UPDATE access_rights SET can_view=:read , can_write=:write , can_upload=:upload
-            WHERE directory_id=:dir_id AND group_id=:group_id
-        ");
-        $stmt->execute([
-            ':read' => in_array('read', $accessRights) ? 1 : 0,
-            ':write' => in_array('write', $accessRights) ? 1 : 0,
-            ':upload' => in_array('upload', $accessRights) ? 1 : 0,
-            ':dir_id' => $directoryId,
-            ':group_id' => $groupID
-        ]);
-
-        if ($sendLink) {
-            // Generate invitation token
-            $invitationToken = AccessMiddleware::generateTokenForUser($db, $email);
-            if (!$invitationToken) {
-                echo json_encode(['success' => false, 'message' => 'Could not generate invitation token']);
-                return;
-            }
-    
-            // Format E-mail
-            $baseUrl = Request::getBaseUrl();
-            $mailBody = InvitationView::render($email, $invitationToken, $cwd, $baseUrl);
-    
-            // Send email
-            $mailError = null;
-            try {
-                $mailEngine = MailEngineFactory::create($config);
-                if (!$mailEngine->send($email, 'You have been invited to contribute on ' . $baseUrl, $mailBody)) {
-                    $mailError = $mailEngine->lastError() ?? 'unknown error';
-                }
-            } catch (\Exception $e) {
-                $mailError = $e->getMessage();
-            }
-
-            App::getLogger()->log('user_invited', ['invited_user' => $email, 'invitation_sent' => $mailError === null]);
-
-            if ($mailError !== null) {
-                // Details (SMTP replies, configuration problems) go to the log only
-                App::getLogger()->log('mail_send_failure', [
-                    'recipient' => $email,
-                    'mail_engine' => $config['mail_engine'] ?? 'mail',
-                    'error' => $mailError,
-                ]);
-                echo json_encode(['success' => false, 'message' => 'Contributor added, but the invitation e-mail could not be sent. See the application log.']);
-                return;
-            }
-
-            echo json_encode(['success' => true, 'message' => 'Invitation sent']);
-            return;
+        if ($group !== null && $group['created']) {
+            App::getLogger()->log('group_created', ['group' => $group['name'], 'default_group_of' => $cwd]);
         }
 
-        App::getLogger()->log('user_invited', ['invited_user' => $email, 'invitation_sent' => false]);
+        $delivery = self::deliverInvitation($config, $db, $email, $cwd);
+        App::getLogger()->log('user_invited', [
+            'invited_user' => $email,
+            'directory' => $cwd,
+            'group' => $group['name'] ?? null,
+            'delivery' => $delivery['delivery'],
+            'invitation_sent' => $delivery['error'] === null,
+        ]);
+        self::answerDelivery($delivery, 'Invitation sent', 'Contributor added, but the invitation e-mail could not be sent. See the application log.');
+    }
 
-        echo json_encode(['success' => true, 'message' => 'Contributor invited']);
-        return;
+    /**
+     * Issue a new token for the account and deliver the link to $directory:
+     * by mail, or, with mail_engine=none, back to the administrator
+     * (answerDelivery). The link is never logged.
+     * @return array{delivery: 'mail'|'manual', link: ?string, error: ?string}
+     */
+    private static function deliverInvitation($config, PDO $db, string $email, string $directory): array
+    {
+        $manual = MailEngineFactory::isManual($config);
+        $token = AccessMiddleware::generateTokenForUser($db, $email);
+        if (!$token) {
+            // The callers checked that the account exists
+            throw new \RuntimeException("No account to issue an invitation token for: $email");
+        }
+
+        $baseUrl = Request::getBaseUrl();
+        if ($manual) {
+            return ['delivery' => 'manual', 'link' => InvitationView::link($email, $token, $directory, $baseUrl), 'error' => null];
+        }
+
+        $error = null;
+        try {
+            $mailEngine = MailEngineFactory::create($config);
+            $body = InvitationView::render($email, $token, $directory, $baseUrl);
+            if (!$mailEngine->send($email, 'You have been invited to contribute on ' . $baseUrl, $body)) {
+                $error = $mailEngine->lastError() ?? 'unknown error';
+            }
+        } catch (\Exception $e) {
+            $error = $e->getMessage();
+        }
+        if ($error !== null) {
+            // Details (SMTP replies, configuration problems) go to the log only
+            App::getLogger()->log('mail_send_failure', [
+                'recipient' => $email,
+                'mail_engine' => MailEngineFactory::engineName($config),
+                'error' => $error,
+            ]);
+        }
+        return ['delivery' => 'mail', 'link' => null, 'error' => $error];
+    }
+
+    /** The JSON answer for a delivery; a manual link is shown once and never cached */
+    private static function answerDelivery(array $delivery, string $sent, string $mailFailed): void
+    {
+        if ($delivery['error'] !== null) {
+            echo json_encode(['success' => false, 'message' => $mailFailed]);
+        } elseif ($delivery['delivery'] === 'manual') {
+            header('Cache-Control: no-store');
+            echo json_encode(['success' => true, 'message' => 'Invitation link created', 'link' => $delivery['link'],
+                              'expires_in' => 3600]);
+        } else {
+            echo json_encode(['success' => true, 'message' => $sent]);
+        }
     }
 
     private static function listGroupPermissions($config, PDO $db)
@@ -681,10 +669,30 @@ class AdminController
         echo json_encode(['success' => $success]);
     }
 
+    /**
+     * A new link to '/' for an existing account; never touches groups or
+     * rights (DFM-08, D22). Refusals for locked accounts and the
+     * session_version increment come with Phase 10 Step 4.
+     */
     private static function resendInvite($config, PDO $db)
     {
-        $_POST['sendLink'] = 'true';
-        self::inviteUser($config, $db);
+        header('Content-Type: application/json');
+        $email = trim(is_string($_POST['email'] ?? null) ? $_POST['email'] : '');
+
+        $stmt = $db->prepare("SELECT id FROM users WHERE username = :u AND deleted_at IS NULL");
+        $stmt->execute([':u' => $email]);
+        if ($stmt->fetchColumn() === false) {
+            echo json_encode(['success' => false, 'message' => 'User not found.']);
+            return;
+        }
+
+        $delivery = self::deliverInvitation($config, $db, $email, '/');
+        App::getLogger()->log('invitation_resent', [
+            'target_user' => $email,
+            'delivery' => $delivery['delivery'],
+            'invitation_sent' => $delivery['error'] === null,
+        ]);
+        self::answerDelivery($delivery, 'Invitation resent', 'The invitation e-mail could not be sent. See the application log.');
     }
 
     private static function listGroupsWithDetails($config, PDO $db)

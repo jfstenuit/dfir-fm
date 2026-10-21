@@ -4,14 +4,19 @@ namespace Views;
 
 class InvitationView
 {
-    public static function render($email, $token, $directory, $baseUrl)
+    /** The invitation link: the password form of LoginController (single use, one hour) */
+    public static function link(string $email, string $token, string $directory, string $baseUrl): string
     {
-        // Construct the invitation URL
-        $url = $baseUrl
+        return $baseUrl
             . '/login?email=' . urlencode($email)
             . '&token=' . urlencode($token)
             . '&directory=' . urlencode($directory);
-        
+    }
+
+    public static function render($email, $token, $directory, $baseUrl)
+    {
+        $url = self::link($email, $token, $directory, $baseUrl);
+
         // Start output buffering
         ob_start();
         ?>

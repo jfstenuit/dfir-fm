@@ -69,14 +69,6 @@ class AdminView
     </nav>
     <div class="tab-content pt-5">
       <div class="tab-pane fade show active" id="usersTab">
-        <!-- Invite User Form -->
-        <form id="inviteUserForm" class="d-flex flex-wrap gap-2 mb-3">
-          <div>
-            <label for="inviteEmailInput" class="visually-hidden">Email</label>
-            <input type="email" class="form-control" id="inviteEmailInput" placeholder="Enter user email" required>
-          </div>
-          <button type="submit" class="btn btn-primary">Invite User</button>
-        </form>
         <!-- Users Table -->
         <table id="usersTable" class="table table-bordered table-striped table-hover table-sm">
           <thead class="table-light">

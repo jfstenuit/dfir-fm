@@ -53,11 +53,13 @@ class FileManagerView
               <i class="bi bi-folder-plus" aria-hidden="true"></i> New Folder
           </a>
         </li>
+        <?php if ($cwd !== '/') : /* no invitation into the root (D14) */ ?>
         <li class="nav-item">
           <a title="Invite Contributor" class="nav-link" href="#" data-bs-toggle="modal" data-bs-target="#inviteModal">
               <i class="bi bi-person-plus" aria-hidden="true"></i> Invite
           </a>
         </li>
+        <?php endif; ?>
         <li class="nav-item">
           <a title="Access Rights" class="nav-link" href="#" data-bs-toggle="modal" data-bs-target="#accessRightsModal">
               <i class="bi bi-person-gear" aria-hidden="true"></i> Access Rights
@@ -137,7 +139,9 @@ NewFolderModal::render();
 OperationResultModal::render();
 DeleteConfirmationModal::render();
 AccessRightsModal::render($cwd);
-InviteModal::render($cwd);
+if ($cwd !== '/') {
+    InviteModal::render($cwd);
+}
 ProfileModal::render($cwd);
 ?>
 </body>

@@ -43,11 +43,12 @@ final class MailTest extends FeatureTestCase
         return $this->smtp;
     }
 
-    private function invite(bool $sendLink = true): HttpResponse
+    private function invite(): HttpResponse
     {
+        $this->server->db()->exec("INSERT INTO directories (name, path, parent_id)
+                                   SELECT 'case-1', '/case-1', 1 WHERE NOT EXISTS (SELECT 1 FROM directories WHERE path = '/case-1')");
         return $this->adminClient()->postWithCsrf('admin', [
-            'a' => 'invite', 'cwd' => '/', 'email' => self::INVITEE,
-            'accessRights' => ['read', 'upload'], 'sendLink' => $sendLink ? 'true' : 'false',
+            'a' => 'invite', 'cwd' => '/case-1', 'email' => self::INVITEE, 'addToDefaultGroup' => 'true',
         ]);
     }
 
@@ -117,12 +118,6 @@ final class MailTest extends FeatureTestCase
         $this->assertStringContainsString('From: DFIR FM Test <noreply@dfir.test>', $message);
         $this->assertStringContainsString('multipart/alternative', $message);
         $this->assertStringContainsString('token=' . $this->invitationToken(), $message);
-    }
-
-    public function testNoMailWithoutSendLink(): void
-    {
-        $this->assertSame(['success' => true, 'message' => 'Contributor invited'], $this->invite(false)->json());
-        $this->assertSame([], $this->server->sentMail());
     }
 
     public function testSmtpFailureIsReportedAndLogged(): void

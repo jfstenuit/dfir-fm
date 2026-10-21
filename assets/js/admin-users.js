@@ -1,4 +1,6 @@
-// assets/js/admin-users.js - Admin page, Users tab: list, invite, groups, lock, delete
+// assets/js/admin-users.js - Admin page, Users tab: list, resend invitation, groups, lock, delete
+//
+// Invitations are made from a folder of the file manager (D22).
 
 import { api, h, icon, on, hideModal, showModal, showResultMessage, groupAutocomplete } from './utils.js';
 
@@ -9,7 +11,6 @@ let bound = false;
 export function init() {
     if (bound) return;
     bound = true;
-    byId('inviteUserForm')?.addEventListener('submit', inviteUser);
     byId('assignGroupForm')?.addEventListener('submit', addToGroup);
     groupAutocomplete('#groupAssignInput');
 
@@ -75,20 +76,6 @@ async function act(fields, done, { reload = true } = {}) {
     } catch (error) {
         showResultMessage(error.message, false);
         return false;
-    }
-}
-
-async function inviteUser(event) {
-    event.preventDefault();
-    const input = byId('inviteEmailInput');
-    const email = input.value.trim();
-    if (!email) {
-        showResultMessage('Email address cannot be empty.', false);
-        return;
-    }
-    // Creates the user only: no folder, no rights, no e-mail
-    if (await act({ a: 'invite', email, sendLink: false }, 'User created.')) {
-        input.value = '';
     }
 }
 

@@ -17,6 +17,20 @@ final class AccountDeletionTest extends FeatureTestCase
         return (int)$stmt->fetchColumn();
     }
 
+    /** An invitation into a subfolder (D14), mail_engine=none: no mail needed */
+    private function invite(string $email): array
+    {
+        $this->server->db()->exec("INSERT INTO directories (name, path, parent_id)
+                                   SELECT 'case-1', '/case-1', 1 WHERE NOT EXISTS (SELECT 1 FROM directories WHERE path = '/case-1')");
+        return $this->adminClient()->postWithCsrf('admin', ['a' => 'invite', 'cwd' => '/case-1', 'email' => $email,
+                                                            'addToDefaultGroup' => 'true'])->json();
+    }
+
+    protected function serverEnv(): array
+    {
+        return ['mail_engine' => 'none'];
+    }
+
     private function deleteBob(): int
     {
         $id = $this->userId(TestServer::BOB);
@@ -95,8 +109,8 @@ final class AccountDeletionTest extends FeatureTestCase
     public function testReinvitingTheAddressCreatesANewAccount(): void
     {
         $oldId = $this->deleteBob();
-        $answer = $this->adminClient()->postWithCsrf('admin', ['a' => 'invite', 'cwd' => '/', 'email' => TestServer::BOB])->json();
-        $this->assertTrue($answer['success']);
+        $answer = $this->invite(TestServer::BOB);
+        $this->assertTrue($answer['success'], json_encode($answer));
 
         $newId = $this->userId(TestServer::BOB);
         $this->assertGreaterThan($oldId, $newId);
@@ -106,7 +120,7 @@ final class AccountDeletionTest extends FeatureTestCase
     {
         $firstId = $this->deleteBob();
         // The address is deleted a second time, after a new invitation
-        $this->adminClient()->postWithCsrf('admin', ['a' => 'invite', 'cwd' => '/', 'email' => TestServer::BOB]);
+        $this->invite(TestServer::BOB);
         $secondId = $this->deleteBob();
 
         $found = $this->server->runBin('find-deleted-user.php', ' Bob@Test.local ');
