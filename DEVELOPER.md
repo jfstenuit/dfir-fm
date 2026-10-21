@@ -12,7 +12,17 @@ Command-line tools live in `bin/` and refuse to run outside the CLI SAPI:
 - `php bin/check-integrity.php`: re-hashes every stored file and compares it with its `files` record (SHA-256 and size). Also reports `files` rows that share a name or a SHA-256 in one directory, and, with the local storage engine, files in storage without a record. Read-only; exit code 0 when everything matches, 1 otherwise.
 - `php bin/expire-uploads.php`: expires uploads without activity for `upload_stale_after` seconds and deletes their staging files. The application also does this whenever an upload starts; the script is for a cron job.
 
-Middleware (such as authentication or CSRF protection) must be applied explicitly per route.
+Routes (`index.php`). Authentication and CSRF checks are global, in `index.php`: every route but `/login` requires a session (otherwise a redirect to `login?redirect=…`), and every POST a valid CSRF token. Authorization (admin, folder rights) is checked by each controller action, through `AccessMiddleware`. POST requests select their action with the field `a`.
+
+| Path | Controller | Purpose |
+|---|---|---|
+| `/` | `FileManagerController` | GET: folder listing (`?p=/path`). POST: `createFolder`, `deleteItem` |
+| `/dl` | `DownloadController` | File download, with `Range` |
+| `/upload` | `UploadController` | Chunked upload (see "Upload protocol") |
+| `/admin` | `AdminController` | Admin page and its actions (users, groups, invitations, access rights); admins only |
+| `/profile` | `ProfileController` | `updatePassword` |
+| `/login` | `LoginController` | Two-step password login, invitation token login |
+| `/logout` | `LogoutController` | |
 
 ## Directory structure
 ```
@@ -54,7 +64,9 @@ project-root/
 ├── src/                       # Source code directory
 │   ├── Backends/              # Dynamically selected backends
 │   │   ├── LogEngine*.php     # Handles logging
+│   │   ├── LogEntry.php       # The log record shared by the log engines
 │   │   ├── MailEngine*.php    # Handles mail sending
+│   │   ├── MailText.php       # Plain-text alternative of the HTML mails
 │   │   └── StorageEngine*.php # Handles backend storage
 │   ├── Controllers/
 │   │   ├── AdminController.php
@@ -75,7 +87,8 @@ project-root/
 │   │   ├── AccessMiddleware.php
 │   │   └── SecurityMiddleware.php
 │   ├── Services/
-│   │   └── ChunkedUpload.php  # Upload state machine, verification, commit
+│   │   ├── ChunkedUpload.php  # Upload state machine, verification, commit
+│   │   └── UploadException.php # Refusal with HTTP status and error code
 │   └── Views/                 # Templates for rendering HTML
 │       ├── Modals/            # Bootstrap modals
 │       │   ├── AccessRightsModal.php
@@ -110,8 +123,8 @@ project-root/
 
 ## Development & Debugging
 
-- Set up a standard Apache + PHP 8.x + SQLite environment.
-- All logs go to the default PHP error log.
+- Set up Apache (`mod_rewrite`, `AllowOverride` for `.htaccess`; `mod_headers` recommended) with PHP 8.4 and the extensions `pdo_sqlite`, `apcu`, `curl`, `gmp` (required by `sendgrid/sendgrid`) and `mbstring`, then `composer install`. Or use the Docker image (see "Docker"). Other web servers need the `.htaccess` rules translated, as `docker/lighttpd.conf` does for lighttpd.
+- Two kinds of logs: the application's events (logins, uploads, downloads, admin actions) go to the log engine (`log_engine`, see "Logging & Forensic Integrity"); PHP errors and configuration problems go to the PHP error log.
 - No framework or build system is used at this time.
 - JavaScript and CSS files are managed manually (see "Front end").
 
@@ -140,14 +153,16 @@ composer test:unit       # fast, no server
 composer test:feature    # HTTP-level, ~1 min
 ```
 
-- **`tests/Unit/`**: pure logic. Client IP resolution, config parsing, `Content-Disposition`, Range parsing, storage path validation, backend factories, mail engine configuration and message building, schema and migrations, admin checks, throttle settings.
-- **`tests/Feature/`**: the application over HTTP. Each test starts a fresh, isolated instance on PHP's built-in server (`Tests\Support\TestServer`) in a temporary directory, with its own `.env`, SQLite database, storage, log file and APCu counters. The project's own `.env`, database and storage are never touched.
+- **`tests/Unit/`**: no web server. Client IP resolution, config parsing and `database_path`, `Content-Disposition`, Range parsing, login redirect targets, storage path validation and staging, backend factories, log records, mail engine configuration and message building, schema and migrations, admin checks, throttle settings, and the upload state machine (`ChunkedUploadTest`: chunks out of order or sent twice, missing chunks, tampered staging, name and content conflicts, rights, geometry, sizes, abort), on a real SQLite database and local storage in a temporary directory.
+- **`tests/Feature/`**: the application over HTTP: login and rate limiting, sessions and cookies, admin authorization, file listing, uploads and downloads, mail, HTTP headers and routing, the `bin/` scripts, `database_path`. Each test starts a fresh, isolated instance on PHP's built-in server (`Tests\Support\TestServer`) in a temporary directory, with its own `.env`, SQLite database, storage, log file and APCu counters. The project's own `.env`, database and storage are never touched.
   - Fixtures: an admin created through `bin/create-admin.php` and a regular user `bob@test.local`. The root directory (id 1) is created by the schema setup, as on a real install.
   - `tests/Support/router.php` mirrors `.htaccess` for the built-in server, so `.htaccess` itself still needs checking on a real Apache.
   - `Tests\Support\HttpClient` behaves like a browser: it keeps cookies and handles the CSRF token and login form.
   - Every feature test fails if the server logged a PHP warning, notice, deprecation or fatal error.
   - Mail never leaves the machine: the test servers and CLI scripts run with `sendmail_path` pointing to `tests/Support/fake-sendmail.php`, and SMTP tests use `Tests\Support\FakeSmtpServer` (a minimal local SMTP sink with `AUTH PLAIN`, no TLS). Both keep the raw messages for assertions. TLS (STARTTLS/SMTPS) is not covered: check it against a real server with `bin/send-test-mail.php`.
 - Security fixes come with a test that fails on the vulnerable code (e.g. `LoginRateLimitTest` for the `X-Forwarded-For` bypass, `AdminAuthorizationTest` for the missing admin guard).
+
+Not covered by PHPUnit: the JavaScript front end and the Apache and lighttpd rules (`router.php` stands in for them). Check those in a browser and with `curl` against a real server after changing them.
 
 Production installs should use `composer install --no-dev`, which leaves PHPUnit out of `vendor/`.
 
@@ -163,7 +178,7 @@ The application now implements several layers of security to defend against comm
   - per client IP (see *Client IP resolution* below): `max_login_attempts`, default 5;
   - per username, from any IP: `max_login_attempts_per_user`, default 10. It's higher because anyone can use it to lock a known username out for the window.
 
-  A request already blocked by the IP limit doesn't count against the username. A successful login resets the username counter only: resetting the IP counter would let an attacker clear it by logging into their own account. Invalid values fall back to the defaults. If APCu is unavailable, the app triggers a fatal error to avoid silent exposure. Counters are per server: several containers or servers don't share them.
+  A request already blocked by the IP limit doesn't count against the username. A successful login resets the username counter only: resetting the IP counter would let an attacker clear it by logging into their own account. Invalid values fall back to the defaults. If APCu is unavailable, login attempts fail with an exception (HTTP 500) rather than running without a limit; a clearer startup check is #14. With `apc.enabled=0` the counters silently do nothing. Counters are per server: several containers or servers don't share them.
 
 - **Client IP resolution**  
   `Request::getClientIp()` is the only source of the client address, used for rate limiting, audit logs and forensic records (`uploaded_from`, `created_from`). It is controlled by the `trusted_proxies` setting: a comma-separated list of IPv4/IPv6 addresses or CIDR ranges.
@@ -183,14 +198,13 @@ The application now implements several layers of security to defend against comm
   A strict `Content-Security-Policy` header is emitted from `index.php`: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'`. No inline scripts or styles are allowed; `data:` images are the SVG icons in Bootstrap's own CSS. It is sent together with `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`, before anything else, so redirects and error pages carry them too. `.htaccess` sets the latter two for static files when `mod_headers` is available.
 
 - **Static files**  
-  `.htaccess` serves only existing static files (CSS, JS including `.mjs`, fonts, images) under `assets/` and the build folders of the three front-end packages (`vendor/twbs/bootstrap/dist/`, `vendor/twbs/bootstrap-icons/font/`, `vendor/enyo/dropzone/dist/`); anything else under `assets/` or `vendor/` is a 404, including PHP scripts, sources and build scripts shipped by Composer packages. `storage/`, `src/`, `bin/`, `docker/` and dotfiles are refused, and every other path goes through `index.php`. A front-end package added later needs its folder added there, in `tests/Support/router.php` and in `docker/lighttpd.conf`, which has the same rules (and a MIME type for each served extension).
+  `.htaccess` serves only existing static files (CSS, JS including `.mjs`, fonts, images) under `assets/` and the build folders of the three front-end packages (`vendor/twbs/bootstrap/dist/`, `vendor/twbs/bootstrap-icons/font/`, `vendor/enyo/dropzone/dist/`); anything else under `assets/` or `vendor/` is a 404, including PHP scripts, sources and build scripts shipped by Composer packages. `storage/`, `src/`, `bin/`, `docker/`, `tests/` and dotfiles are refused, and every other path goes through `index.php`. A front-end package added later needs its folder added there, in `tests/Support/router.php` and in `docker/lighttpd.conf`, which has the same rules (and a MIME type for each served extension).
 
 - **Downloads**  
-  `Response::contentDisposition()` builds the `Content-Disposition` header: an ASCII fallback `filename` with quotes, backslashes, `%`, `;` and control characters replaced, plus the exact name in `filename*=UTF-8''…` (RFC 6266).
-
+  `GET /dl` checks the read right on the file's folder for every request. `Response::contentDisposition()` builds the `Content-Disposition` header: an ASCII fallback `filename` with quotes, backslashes, `%`, `;` and control characters replaced, plus the exact name in `filename*=UTF-8''…` (RFC 6266). A single `Range` (`bytes=a-b`, `a-`, `-n`) gets a `206`, an unsatisfiable one a `416`; multiple ranges get the whole file. Logged as `download_success`, `download_partial` or `download_failure`.
 
 - **Session Hijack Protection**  
-Session cookies are `HttpOnly`, `SameSite=Lax`, scoped to the application's base path, and `Secure` when the request is HTTPS (directly, `X-Forwarded-Proto` from a trusted proxy, or `force_https=true`). `Lax` rather than `Strict`: `Strict` drops the cookie on navigations coming from another site, which breaks invitation links opened from an e-mail and the planned OIDC callback. Cross-site POSTs remain blocked by `Lax` and the CSRF tokens. `session.use_strict_mode` rejects session IDs the server didn't issue, and the session ID is regenerated at login (session fixation). Sessions are validated against inactivity timeout and invalidated on logout.
+Session cookies are `HttpOnly`, `SameSite=Lax`, scoped to the application's base path, and `Secure` when the request is HTTPS (directly, `X-Forwarded-Proto` from a trusted proxy, or `force_https=true`). `Lax` rather than `Strict`: `Strict` drops the cookie on navigations coming from another site, which breaks invitation links opened from an e-mail and the planned OIDC callback. Cross-site POSTs remain blocked by `Lax` and the CSRF tokens. `session.use_strict_mode` rejects session IDs the server didn't issue, and the session ID is regenerated at login (session fixation). Sessions end after 1 hour without a request (hardcoded in `Session::isStillValid()`) and on logout. PHP's own `session.gc_maxlifetime` (1440 s by default) can delete an idle session earlier; a configurable timeout is part of #16.
 
 Future improvements may include:
 - Device/session management
@@ -203,14 +217,17 @@ The application now includes a **pluggable logging backend system**, abstracted 
 
 Log engines are configured via `.env` using the `log_engine` key.
 
-The logger is globally available via `App::getLogger()` and all controller-level events are expected to log security-sensitive actions, including:
+The logger is globally available via `App::getLogger()` and all controller-level events are expected to log security-sensitive actions. Every record carries `ts` (UTC), `action` (the event), `username`, the client `ip` (and `peer_ip`, see *Client IP resolution*), plus the event's own fields. Events logged today:
 
-- Login success/failure
-- Logout
-- Uploads (`upload_start`, `upload_verifying`, `upload_completed` with size and SHA-256, `upload_name_conflict`, `upload_duplicate_refused`, `upload_denied`, `upload_chunk_rejected`, `upload_failed`, `upload_aborted`, `upload_expired`, `upload_verify_restarted`) and deletions
-- Password changes
-- Group/user permission changes (WIP)
-- Invitations (`user_invited`, with `invitation_sent`) and mail failures (`mail_send_failure`)
+- Login and logout: `login_password_success`, `login_password_failure`, `login_token_success`, `login_token_failure`, `logout`
+- Uploads: `upload_start`, `upload_verifying`, `upload_completed` (with size and SHA-256), `upload_name_conflict`, `upload_duplicate_refused`, `upload_denied`, `upload_chunk_rejected`, `upload_failed`, `upload_aborted`, `upload_expired`, `upload_verify_restarted`
+- Downloads: `download_success`, `download_partial`, `download_failure`
+- Folders and files: `directory_created`, `directory_deleted`, `file_deleted`, `filemanager_failure` (a missing folder requested)
+- Administration: `user_invited` (with `invitation_sent`), `user_locked`, `user_deleted`, `group_created`, `group_deleted`, `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
+- Mail failures: `mail_send_failure`
+- Command line: `cli_admin_created` (`bin/create-admin.php`, also when it resets a password) and `cli_test_mail_sent`, with `username` set to `cli:` + the system user; `upload_expired` from `bin/expire-uploads.php`, without a username
+
+Not logged yet: password changes from the profile dialog.
 
 **Forensic constraints:**
 - Every uploaded file is assembled in staging, then SHA-256-hashed by reading it back from storage, and only then moved to its final path and recorded with its real size. A partial or unverified file is never visible
@@ -225,7 +242,8 @@ Developers must **never bypass or disable** these integrity mechanisms. When add
 
 Access rights : 
 - a user is in one or more groups
-- a group has access to one or more directories, either in read-only, in read-write or upload-only
+- a group has access to one or more directories, with three rights per directory (`access_rights`): `can_view` (list and download every file), `can_write` (upload, create and delete folders and files) and `can_upload` (upload, and list only one's own uploads). Admins manage them from the file manager's access-rights dialog
+- rights are set on each folder and are not inherited by its subfolders. A subfolder appears in its parent's listing only to users who have a right on it
 - a group flagged `is_admin = 1` makes its members administrators: full access to every directory, plus the admin interface
 - `AccessMiddleware::isAdmin()` is the single admin check. It queries the database on every request (no session cache), so revoking admin membership takes effect immediately
 - every action of `AdminController` is admin-only (one guard at the top of `handle()`). File operations open to regular users (`createFolder`, `deleteItem`) live in `FileManagerController` (`POST /`, field `a`) and check the caller's rights on the target directory
@@ -234,44 +252,51 @@ Access rights :
 ### 1. **User Management**
 | Feature | Description | Location |
 |--------|-------------|-------------|
-| 🧑 View Users | List all registered users | Admin UI |
-| ➕ Create User | Manually create a user (name, email, password) | This will not be implemented - Creating a user implies inviting him/her |
-| ✉️ Invite User | Generate & send a tokenized invitation link | Admin UI - the user must be part of at least one group upon creation|
-| ✏️ Edit User | Change user details, add/remove group memberships | Admin UI |
-| 🗑️ Deactivate/Delete User | Either soft-disable or remove entirely | Admin UI |
+| 🧑 View Users | List all users, their groups and their status (active: a password or a valid invitation; otherwise locked) | Admin UI, Users tab |
+| ➕ Create User | Not available: a contributor is created by inviting them. Administrators are created with `bin/create-admin.php` | — |
+| ✉️ Invite User | Creates the user, adds them to the group `<their e-mail domain> users`, gives that group the chosen rights on the current folder and optionally e-mails a tokenized login link | File Manager UI (admins), Invite dialog |
+| 🔁 Resend Invitation | A new invitation link | Admin UI, Users tab |
+| 👥 Group memberships | Add or remove a user's groups | Admin UI, Users tab |
+| 🔒 Lock User | Makes the password and any pending invitation unusable | Admin UI, Users tab |
+| 🗑️ Delete User | Removes the account. Their files stay in storage and in `files`, but the listings no longer show them (they join on `users`) | Admin UI, Users tab |
+
+Changing a user's name or e-mail address isn't available. The invitation workflow is under review (#22).
 
 ---
 
 ### 2. **User Self-Service**
 | Feature | Description | Location |
 |--------|-------------|-------------|
-| ✏️ Edit User | Change user details, add/change password | File Manager UI - in a modal|
+| 🔑 Change Password | New password, typed once; the current one isn't asked for | Profile dialog (File Manager and Admin UI) |
 
 ---
 
 ### 3. **Group Management**
 | Feature | Description | Location |
 |--------|-------------|-----------|
-| 👥 View Groups | List all groups and their descriptions | Admin UI |
-| ➕ Create Group | Name, description | Admin UI, but also during directory access assignment (see below) |
-| 👤 Add/Remove Users | Assign or remove users from a group | Admin UI |
-| 🗑️ Delete Group | Remove a group (with warning if it still has members) | Admin UI |
+| 👥 View Groups | List all groups, their members and their folders | Admin UI, Groups tab |
+| ➕ Create Group | By name | File Manager UI (admins): typing a new group name in the access-rights dialog creates it |
+| 👤 Add/Remove Users | Assign or remove users from a group | Admin UI, Users tab |
+| 🗑️ Delete Group | Refused while the group has members, and for the admin group | Admin UI, Groups tab |
 
 ---
 
-### 5. **Directory Permissions UI**
+### 4. **Directory Permissions UI**
 | Feature | Description | Location |
 |--------|-------------|----------|
-| 🔍 Directory Tree View | Browse directories and manage group permissions | File Manager UI |
-| 👁️ View Group Access | See which groups can do what in a selected directory |  File Manager UI |
-| 🔧 Edit Access Rights | Add/remove group access and set permission levels (read, write, upload) | File Manager UI, should allow on-the-fly group creation |
+| 📁 Folder browser | Browse the folders the user has a right on | File Manager UI |
+| 👁️ View Group Access | See which groups can do what in the current folder | File Manager UI (admins), access-rights dialog |
+| 🔧 Edit Access Rights | Add/remove group access and set the rights (read, write, upload) | File Manager UI (admins), access-rights dialog |
 
+---
 
-### 6. **Audit & Logs (Planned for Later)**
+### 5. **Audit & Logs (Planned for Later, #23)**
 | Feature | Description | Location |
 |--------|-------------|----------|
-| 📜 View User Actions | Filterable logs: uploads, downloads, logins | Admin UI |
+| 📜 View User Actions | Filterable logs: uploads, downloads, logins | Admin UI, Logs tab (an empty placeholder today) |
 | 🧾 Group/Permission Changes | Audit trail for admin actions (access revokes, user changes) | Admin UI |
+
+Until then, the events are in the log engine's output (see "Logging & Forensic Integrity").
 
 
 ## Database Bootstrapping
@@ -290,7 +315,9 @@ All database logic uses raw SQL for performance and transparency.
 
 ## Database structure
 
-Extract database structure with `sqlite3 ./storage/database/app.sqlite '.schema'`.
+Extract the database structure with `sqlite3 <database_path> '.schema'` (by default `storage/database/app.sqlite`; in the Docker container, `/data/database/app.sqlite`).
+
+SQLite doesn't enforce the `FOREIGN KEY` clauses here: the application doesn't enable `PRAGMA foreign_keys`, so `ON DELETE CASCADE` has no effect. Deleting a user leaves their `user_group` rows, and deleting a group or a folder leaves its `access_rights` rows. `AUTOINCREMENT` ids are never reused, so these rows grant nothing, but they remain.
 
 Database structure is : 
 ```
@@ -346,7 +373,8 @@ CREATE TABLE IF NOT EXISTS 'access_rights' (
     can_write BOOLEAN NOT NULL DEFAULT FALSE,
     can_upload BOOLEAN NOT NULL DEFAULT FALSE,
     FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
-    FOREIGN KEY (directory_id) REFERENCES directories(id) ON DELETE CASCADE
+    FOREIGN KEY (directory_id) REFERENCES directories(id) ON DELETE CASCADE,
+    UNIQUE (group_id, directory_id)
 );
 CREATE UNIQUE INDEX files_dir_name ON files(directory_id, name);
 CREATE UNIQUE INDEX files_dir_sha256 ON files(directory_id, sha256);
@@ -381,6 +409,44 @@ CREATE TABLE upload_chunks (           -- chunks received; deleted when the uplo
 );
 ```
 
+## Upload protocol
+
+Dropzone 6's chunked upload, with a server that makes it safe for evidence (`Controllers\UploadController` for HTTP, `Services\ChunkedUpload` for the logic). One endpoint, `POST /upload`, `multipart/form-data`, with the CSRF token in `X-CSRF-TOKEN`. The field `a` selects the action. Every response is JSON with `Cache-Control: no-store`.
+
+| `a` | Fields | Success |
+|---|---|---|
+| `checkRights` | `cwd`, `name`, `size` (name and size optional) | `200 {"status":"success",…}`. Refusals as below, before any byte is transferred |
+| *(none)*: a chunk | `file` (the bytes, with the file name), `dzuuid`, `dzchunkindex`, `dztotalchunkcount`, `dztotalfilesize`, `dzchunksize`, `dzchunkbyteoffset`, `cwd` | `200 {"status":"progress","received":n,"chunk_count":N}` |
+| `complete` | `dzuuid` | `200 {"status":"completed","file":{id,name,size,sha256,uploaded_at,uploaded_by,uploaded_from},…}`, or `202 {"status":"verifying",…}` while another request verifies it. Idempotent |
+| `status` | `dzuuid` | `200 {"status","name","size","verified_bytes","message"?,"file"?}` |
+| `abort` | `dzuuid` | `200 {"status":"aborted",…}`; `409` if already completed |
+
+`cwd` is the target folder's path (`/` or empty for the root). `dzuuid` is a UUID chosen by the client.
+
+**Errors** have a 4xx/5xx status and `{"status":"error","code":…,"message":…}`, sometimes with more fields (`missing`: the missing chunk indexes; `upload`: the upload's state; `file`: the existing file with the same content):
+
+| Status | Codes |
+|---|---|
+| 400 | `InvalidChunk`, `InvalidName`, `InvalidUpload` (bad `dzuuid`), `InvalidArgument`, `MissingChunks` |
+| 403 | `AccessDenied` |
+| 404 | `NoSuchDirectory`, `NoSuchUpload` |
+| 405 | `MethodNotAllowed` |
+| 409 | `NameConflict`, `DuplicateContent`, `InvalidState` |
+| 413 | `EntityTooLarge` (over `upload_max_size`, or over PHP's request limits) |
+| 422 | `SizeMismatch` |
+| 500 | `StorageError`, `ServerError`, `InternalError` |
+
+As on every route, an expired session gets a redirect to the login page and a refused CSRF token a `403` with `code: csrf_invalid` (see *CSRF Protection*).
+
+**Server behaviour:**
+- An upload is keyed by (user, `dzuuid`): another user's uuid is another upload. Its first chunk (any index) creates it, after the rights, size and name checks; a new upload of the same name in the same folder by the same user replaces their unfinished one.
+- The geometry (size, chunk size, chunk count, name, folder) is fixed by the first chunk and checked on every chunk: every chunk but the last has exactly `dzchunksize` bytes, at offset `index × chunk size`. An empty file is one empty chunk.
+- Each chunk is written at its offset into the staging element (`.uploads/<server key>` with the local engine) and recorded in `upload_chunks`, so a chunk sent twice or out of order is harmless. Rights are re-checked on every request.
+- `complete` checks that every chunk is present and the staged size, then hashes the staged file read back from storage (progress in `verified_bytes`), re-checks the rights, the name and duplicate content, then inserts `files` with the real size and moves the file into place in one transaction. A verification without progress for 120 s (the request running it died) is restarted by the next `complete` or `status`.
+- States: `in_progress → verifying → completed`, or `aborted`, `failed`, `expired`. Terminal rows are kept for the audit trail; their chunk rows and staging files are deleted. Uploads without activity for `upload_stale_after` seconds expire (when an upload starts, or with `bin/expire-uploads.php`).
+
+**Client** (`filemanager.js`): `forceChunking`, 2 MiB chunks, one at a time, `retryChunks` ×3. Dropzone's `accept` hook sends `checkRights`; `chunksUploaded` sends `complete` and polls `status` every second, showing "Verifying stored file… n%". If the `complete` response is lost (e.g. a proxy timeout on a long verification), the polls deliver the outcome. Dropzone's `canceled` event sends `abort`. A refusal's message stays visible under the file's preview.
+
 ## Backends
 
 The application uses an Interface/Factory pattern to dynamically select backends.
@@ -404,9 +470,10 @@ Besides reading, uploads need a **staging** area (`stagingCreate`, `stagingWrite
 
 ### Logging
 
-- Syslog
-- File
-- Stderr : For Docker and containerized deployments
+`log_engine` (`log_dest` is still accepted as an older name):
+- `file` (default): appends to `log_file_path`, one event per line, `log_format=jsonl` (default) or `csv`. The application refuses to serve requests (HTTP 500) if the file's directory isn't writable by the PHP user.
+- `syslog`: JSON, with the identity `syslog_tag` (default `dfir-fm`).
+- `stderr`: JSON lines on the PHP process's stderr; for containers (see "Docker").
 
 ## Configuration
 
@@ -419,6 +486,25 @@ Besides reading, uploads need a **staging** area (`stagingCreate`, `stagingWrite
 **Environment overrides:** `DFIRFM_<KEY>` overrides or adds `<key>` (lowercased), e.g. `DFIRFM_STORAGE_ENGINE=local`. Unprefixed variables are ignored. `.env` may be absent only if at least one `DFIRFM_` variable is set, as in containers. Otherwise a missing file stops the application.
 
 **Permissions:** `.env` holds secrets and must be readable by the PHP user but not by everyone, e.g. owner you, group `www-data`, mode `640`. An unreadable `.env` stops the application with a 500 ("Environment file not readable"), rather than silently running on defaults as earlier versions did.
+
+**Keys.** `.env.sample` documents each one; this is the index:
+
+| Area | Keys |
+|---|---|
+| Mail | `mail_engine`, `smtp_host`, `smtp_secure`, `smtp_port`, `smtp_user`, `smtp_password`, `smtp_timeout`, `sendgrid_api_key`, `default_mail_from`, `default_mail_from_name` |
+| Storage | `storage_engine`, `base_storage_directory` |
+| Database | `database_path` |
+| Uploads | `upload_max_size`, `upload_stale_after` |
+| Security | `trusted_proxies`, `force_https`, `max_login_attempts`, `max_login_attempts_per_user`, `login_lockout_duration` |
+| Logging | `log_engine`, `log_file_path`, `log_format`, `syslog_tag` |
+| Docker only (read by Compose, ignored by the application) | `uid`, `gid`, `http_port`, `files_dir`, `log_dir` |
+
+**Request size limits.** Uploads arrive in chunks of 2 MiB (set in `filemanager.js`), each in a `multipart/form-data` request a little larger than that. Every layer must accept such a request:
+- PHP: `upload_max_filesize` and `post_max_size`, e.g. `8M` (the Docker image's `docker/php.ini`). PHP's defaults are 2M and 8M: a 2 MiB chunk is over `upload_max_filesize=2M`. A refused chunk gets `413 EntityTooLarge`.
+- Apache: `LimitRequestBody`, if set, at least that size.
+- A reverse proxy: e.g. nginx's `client_max_body_size`, 1m by default, which is too small.
+
+The largest file is set by `upload_max_size`, not by these limits.
 
 ## Docker
 
@@ -463,6 +549,12 @@ Each backend is responsible for parsing its configuration from the `.env` file.
 
 - Database migrations are minimal (`PRAGMA user_version` steps in `Database::migrate()`), with no down-migrations
 - No continuous integration yet: run `composer test` before committing
+- Only the local storage engine exists (Azure Blob and S3: #6, #7)
+- Session idle timeout hardcoded to 1 hour; no absolute lifetime; locking or deleting a user doesn't end their open sessions (#16)
+- Password changes aren't logged, and the profile dialog doesn't ask for the current password
+- A deleted user's files disappear from the listings (see *User Management*)
+- No forgotten-password reset (#1); the Logs tab of the admin page is empty (#23)
+- Login rate-limit counters are per server (APCu)
 
 ## Contributing
 
