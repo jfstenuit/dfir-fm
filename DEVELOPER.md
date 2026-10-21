@@ -9,7 +9,7 @@ The application uses a single entrypoint: `index.php`. It handles routing manual
 Command-line tools live in `bin/` and refuse to run outside the CLI SAPI:
 - `php bin/create-admin.php <username>`: creates an administrator (or resets an existing user's password and adds them to the admin group) and prints a random password once. This is how the first administrator is created; no default account exists. It's also the break-glass tool when every administrator is locked out: it needs shell access only, and no identity provider.
 - `php bin/send-test-mail.php <recipient>`: sends a test e-mail through the configured mail engine, exactly as invitations are sent. Exit code 0 when the engine accepted the message, 1 with the reason on stderr otherwise. Run it as the web server user (e.g. `sudo -u www-data php bin/send-test-mail.php …`) to also check its permissions.
-- `php bin/check-integrity.php`: re-hashes every stored file and compares it with its `files` record (SHA-256 and size). Also reports `files` rows that share a name or a SHA-256 in one directory, and, with the local storage engine, files in storage without a record. Read-only; exit code 0 when everything matches, 1 otherwise.
+- `php bin/check-integrity.php`: re-hashes every stored file and compares it with its `files` record (SHA-256 and size). Also reports `files` rows that share a name or a SHA-256 in one directory, rows that refer to a missing row (`PRAGMA foreign_key_check`), and, with the local storage engine, files in storage without a record. Read-only; exit code 0 when everything matches, 1 otherwise.
 - `php bin/find-deleted-user.php <email>`: lists the deleted accounts of an e-mail address (see *Deleted accounts*), with their id, so that `files.uploaded_by`, `directories.created_by` and the log can be searched by id. Read-only; each lookup is logged with the hash of the address, not the address. Exit code 0 when an account was found, 1 otherwise.
 - `php bin/expire-uploads.php`: expires uploads without activity for `upload_stale_after` seconds and deletes their staging files. The application also does this whenever an upload starts; the script is for a cron job.
 
@@ -273,7 +273,7 @@ Accounts are never removed from `users`, so that `files.uploaded_by` and `direct
 - sets `password = '!'`, clears any invitation token, records `deleted_at` (UTC) and `deleted_by`;
 - removes the account's group memberships.
 
-Listings show the uploader of its files as `deleted user #<id>` (and `unknown user #<id>` for an id without a `users` row, from deletions made before this rule). A deleted account is hidden from the Users tab, refused by the login (password and token), by the admin actions on users and by `bin/create-admin.php`. Inviting the same address again creates a new account, with a new id.
+Listings show the uploader of its files as `deleted user #<id>` (and `unknown user #<id>` for an id without a `users` row; migration v4 gives such ids a deleted account). A deleted account is hidden from the Users tab, refused by the login (password and token), by the admin actions on users and by `bin/create-admin.php`. Inviting the same address again creates a new account, with a new id.
 
 The pseudonym is pseudonymous, not anonymous: anyone who has the address can compute its hash and find the account. That is the purpose: an investigation about an address can still find what the account did, with `bin/find-deleted-user.php`. Under the GDPR it remains personal data. The application log keeps clear addresses in the events logged before the deletion, for the log's own retention period.
 
@@ -322,7 +322,8 @@ Database initialization is handled programmatically in `src/Core/Database.php`.
 - **v1:** adds `groups.is_admin` and flags group `id = 1`, the group the former hardcoded admin check trusted. It also locks the formerly seeded `admin` account if it still has the default password `admin`; the lock is reported in the PHP error log. Create a new administrator with `php bin/create-admin.php <username>`.
 - **v2:** replaces the v1 `uploads` table (in-progress v1 uploads are discarded; their partial files, left at their final path by the v1 code, are listed in the PHP error log) with `uploads` and `upload_chunks`, and adds the unique indexes `files(directory_id, name)` and `files(directory_id, sha256)`. The v1 upload code could create two rows for one name; the migration never drops such evidence records. If it finds any, it stops, lists them in the PHP error log, and the application refuses to run until an operator resolves them. `bin/check-integrity.php` lists them too, along with stored files that no longer match their hash.
 
-- **v3:** adds `users.deleted_at` and `users.deleted_by` (soft deletion of accounts). Existing accounts stay active; accounts deleted before v3 have no row any more, and their files are listed as `unknown user #<id>`.
+- **v3:** adds `users.deleted_at` and `users.deleted_by` (soft deletion of accounts). Existing accounts stay active.
+- **v4:** repairs the rows the foreign keys would refuse. Ids of accounts deleted before v3, still referenced by files, folders or uploads, get a deleted account named `deleted:unknown:<id>`. Memberships of missing or deleted accounts and of missing groups, access rights of missing groups or folders, uploads into missing folders and chunks of missing uploads are deleted. Files and folders whose folder is missing are kept (evidence records) and listed as "to review". Every change is reported in the PHP error log.
 
 To add a migration, add a `if ($version < N)` block in `migrate()` that ends with `PRAGMA user_version = N`. Back up the database file (`database_path`, by default `storage/database/app.sqlite`) before upgrading.
 
@@ -334,7 +335,7 @@ All database logic uses raw SQL for performance and transparency.
 
 Extract the database structure with `sqlite3 <database_path> '.schema'` (by default `storage/database/app.sqlite`; in the Docker container, `/data/database/app.sqlite`).
 
-SQLite doesn't enforce the `FOREIGN KEY` clauses here: the application doesn't enable `PRAGMA foreign_keys`, so `ON DELETE CASCADE` has no effect. Deleting a group or a folder leaves its `access_rights` rows, and users deleted before soft deletion (migration v3) left their `user_group` rows. `AUTOINCREMENT` ids are never reused, so these rows grant nothing, but they remain.
+SQLite doesn't enforce the `FOREIGN KEY` clauses here: the application doesn't enable `PRAGMA foreign_keys`, so `ON DELETE CASCADE` has no effect. Deleting a group or a folder leaves its `access_rights` rows (migration v4 removed those left until then). `AUTOINCREMENT` ids are never reused, so these rows grant nothing, but they remain.
 
 Database structure is : 
 ```

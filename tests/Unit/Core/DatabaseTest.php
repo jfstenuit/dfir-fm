@@ -55,7 +55,7 @@ final class DatabaseTest extends TestCase
     {
         $db = $this->init('fresh.sqlite');
 
-        $this->assertSame(3, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(4, self::scalar($db, 'PRAGMA user_version'));
         $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM users'), 'no seeded user');
         $this->assertSame(1, self::scalar($db, 'SELECT COUNT(*) FROM groups WHERE is_admin = 1'));
         $this->assertSame(['user_id', 'group_id'], $db->query('PRAGMA table_info(user_group)')->fetchAll(PDO::FETCH_COLUMN, 1));
@@ -145,7 +145,7 @@ final class DatabaseTest extends TestCase
         });
 
         $db = $this->init('v1.sqlite');
-        $this->assertSame(3, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(4, self::scalar($db, 'PRAGMA user_version'));
         $this->assertContains('client_uuid', $db->query('PRAGMA table_info(uploads)')->fetchAll(PDO::FETCH_COLUMN, 1));
         $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM uploads'), 'v1 uploads discarded');
         $this->assertSame(3, self::scalar($db, 'SELECT COUNT(*) FROM files'), 'files kept; NULL hashes may repeat');
@@ -164,11 +164,49 @@ final class DatabaseTest extends TestCase
         $db->exec("PRAGMA user_version = 2");
 
         $db = $this->init('v2.sqlite');
-        $this->assertSame(3, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(4, self::scalar($db, 'PRAGMA user_version'));
         $columns = $db->query('PRAGMA table_info(users)')->fetchAll(PDO::FETCH_COLUMN, 1);
         $this->assertContains('deleted_at', $columns);
         $this->assertContains('deleted_by', $columns);
         $this->assertSame(1, self::scalar($db, 'SELECT COUNT(*) FROM users WHERE deleted_at IS NULL'), 'existing accounts not deleted');
+    }
+
+    public function testMigrationV4RepairsReferencesToMissingRows(): void
+    {
+        $db = $this->init('v3.sqlite');
+        $db->exec("INSERT INTO users (id, username, password) VALUES (2, 'kept@example.org', 'x')");
+        $db->exec("INSERT INTO groups (id, name) VALUES (5, 'kept')");
+        $db->exec("INSERT INTO directories (id, name, path, parent_id, created_by) VALUES (10, 'case', '/case', 1, 7)");
+        // Uploader 8 and creator 7 were hard-deleted; directory 99 no longer exists
+        $db->exec("INSERT INTO files (id, directory_id, name, size, sha256, uploaded_by) VALUES
+                   (1, 10, 'a.bin', 1, 'aa', 8), (2, 99, 'lost.bin', 1, 'bb', 2)");
+        $db->exec("INSERT INTO user_group (user_id, group_id) VALUES (2, 5), (8, 5), (2, 6)");
+        $db->exec("INSERT INTO access_rights (group_id, directory_id, can_view) VALUES (5, 10, 1), (6, 10, 1), (5, 99, 1)");
+        $db->exec("INSERT INTO uploads (id, user_id, client_uuid, directory_id, name, size, chunk_size, chunk_count, staging_key, status)
+                   VALUES (1, 9, 'u', 99, 'x', 1, 1, 1, 'k1', 'aborted'), (2, 9, 'v', 10, 'y', 1, 1, 1, 'k2', 'aborted')");
+        $db->exec("INSERT INTO upload_chunks (upload_id, chunk_index, size) VALUES (1, 0, 1), (3, 0, 1)");
+        $db->exec("PRAGMA user_version = 3");
+
+        $db = $this->init('v3.sqlite');
+        $this->assertSame(4, self::scalar($db, 'PRAGMA user_version'));
+
+        // Tombstones for the missing uploader, creator and upload owner
+        $tombstones = $db->query("SELECT id, username FROM users WHERE deleted_at IS NOT NULL ORDER BY id")->fetchAll(PDO::FETCH_KEY_PAIR);
+        $this->assertSame([7 => 'deleted:unknown:7', 8 => 'deleted:unknown:8', 9 => 'deleted:unknown:9'], $tombstones);
+
+        // Link rows to missing rows are gone, the others stay
+        $this->assertSame([[2, 5]], $db->query("SELECT user_id, group_id FROM user_group")->fetchAll(PDO::FETCH_NUM));
+        $this->assertSame([[5, 10]], $db->query("SELECT group_id, directory_id FROM access_rights")->fetchAll(PDO::FETCH_NUM));
+        $this->assertSame([2], array_map('intval', $db->query("SELECT id FROM uploads")->fetchAll(PDO::FETCH_COLUMN)));
+        $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM upload_chunks'));
+
+        // Evidence rows are never deleted: the file in a missing folder is kept and reported
+        $this->assertSame(2, self::scalar($db, 'SELECT COUNT(*) FROM files'));
+        $this->assertSame(['files id 2 refers to a missing directories row'], Database::foreignKeyProblems($db));
+        $log = (string)file_get_contents("$this->dir/php-errors.log");
+        $this->assertStringContainsString('user id 8 no longer existed', $log);
+        $this->assertStringContainsString('deleted 2 user_group row(s)', $log);
+        $this->assertStringContainsString('kept, to review: files id 2 refers to a missing directories row', $log);
     }
 
     public function testMigrationV2StopsOnDuplicateFiles(): void

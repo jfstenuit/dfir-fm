@@ -9,6 +9,7 @@
 //     schema migration v2; the v1 upload code could create them)
 //   - with storage_engine=local, files in storage without a database record
 //     (e.g. partial uploads left by v1)
+//   - rows that refer to a missing row (PRAGMA foreign_key_check)
 //
 // Read-only: it never changes the database or the storage. Run it as the web
 // server user. Exit status: 0 if everything matches, 1 if not, 2 on error.
@@ -51,6 +52,9 @@ $report = function (string $line) use (&$problems) {
 
 foreach (Database::duplicateFiles($db) as $line) {
     $report("DUPLICATE  $line");
+}
+foreach (Database::foreignKeyProblems($db) as $line) {
+    $report("REFERENCE  $line");
 }
 
 $files = $db->query("SELECT f.id, f.name, f.size, f.sha256, d.path AS directory

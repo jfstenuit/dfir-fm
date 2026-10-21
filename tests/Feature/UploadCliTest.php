@@ -34,6 +34,15 @@ final class UploadCliTest extends FeatureTestCase
         $this->assertSame('changed!', file_get_contents("$files/tampered.bin"), 'read-only');
     }
 
+    public function testIntegrityReportsReferencesToMissingRows(): void
+    {
+        $this->server->addFile('a.bin', 'alpha', 999);
+
+        $result = $this->server->runBin('check-integrity.php');
+        $this->assertSame(1, $result['exit']);
+        $this->assertMatchesRegularExpression('#^REFERENCE +files id 1 refers to a missing users row$#m', $result['stdout']);
+    }
+
     public function testExpireUploads(): void
     {
         $db = $this->server->db();

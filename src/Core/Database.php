@@ -203,6 +203,85 @@ class Database
         if ($version < 3) {
             self::migrateToV3();
         }
+
+        if ($version < 4) {
+            self::migrateToV4();
+        }
+    }
+
+    /**
+     * v4: repair the rows that the foreign keys would refuse, before they
+     * are enforced.
+     * - Accounts removed before soft deletion (v3) get a tombstone row with
+     *   their id, so that files, folders and uploads keep an uploader.
+     * - Link rows to a missing user, group, folder or upload are deleted:
+     *   memberships (also those of deleted accounts), access rights, uploads
+     *   into a removed folder and their chunks. The upload events remain in
+     *   the application log.
+     * - Files and folders whose folder is missing are evidence records: they
+     *   are kept and reported (bin/check-integrity.php reports them too).
+     * Every change is reported in the PHP error log.
+     */
+    private static function migrateToV4()
+    {
+        $db = self::$connection;
+        $db->exec("BEGIN IMMEDIATE");
+        try {
+            if ((int)$db->query("PRAGMA user_version")->fetchColumn() >= 4) {
+                $db->exec("COMMIT"); // another request migrated meanwhile
+                return;
+            }
+
+            $missingUsers = $db->query("
+                SELECT uploaded_by FROM files WHERE uploaded_by IS NOT NULL
+                UNION SELECT created_by FROM directories WHERE created_by IS NOT NULL
+                UNION SELECT user_id FROM uploads
+                EXCEPT SELECT id FROM users")->fetchAll(PDO::FETCH_COLUMN);
+            $tombstone = $db->prepare("INSERT INTO users (id, username, email, password, deleted_at)
+                                       VALUES (:id, :name, :name, '!', :now)");
+            foreach ($missingUsers as $id) {
+                $tombstone->execute([':id' => $id, ':name' => "deleted:unknown:$id", ':now' => gmdate('Y-m-d H:i:s')]);
+                error_log("DFIR FM migration v4: user id $id no longer existed; added a deleted account as its uploader or creator");
+            }
+
+            $orphans = [
+                // Deleted accounts (tombstones included) have no memberships
+                'user_group' => "user_id NOT IN (SELECT id FROM users WHERE deleted_at IS NULL) OR group_id NOT IN (SELECT id FROM groups)",
+                'access_rights' => "group_id NOT IN (SELECT id FROM groups) OR directory_id NOT IN (SELECT id FROM directories)",
+                'uploads' => "directory_id NOT IN (SELECT id FROM directories)",
+                'upload_chunks' => "upload_id NOT IN (SELECT id FROM uploads)",
+            ];
+            foreach ($orphans as $table => $where) {
+                $count = $db->exec("DELETE FROM $table WHERE $where");
+                if ($count) {
+                    error_log("DFIR FM migration v4: deleted $count $table row(s) referring to a missing row");
+                }
+            }
+
+            foreach (self::foreignKeyProblems() as $line) {
+                error_log("DFIR FM migration v4: kept, to review: $line");
+            }
+
+            $db->exec("PRAGMA user_version = 4");
+            $db->exec("COMMIT");
+        } catch (\Throwable $e) {
+            $db->exec("ROLLBACK");
+            throw $e;
+        }
+    }
+
+    /**
+     * Rows that refer to a missing row (PRAGMA foreign_key_check)
+     * @return list<string> one line per row
+     */
+    public static function foreignKeyProblems(?PDO $db = null): array
+    {
+        $db ??= self::$connection;
+        $lines = [];
+        foreach ($db->query("PRAGMA foreign_key_check")->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $lines[] = "{$row['table']} id {$row['rowid']} refers to a missing {$row['parent']} row";
+        }
+        return $lines;
     }
 
     /**
