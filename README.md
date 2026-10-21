@@ -98,6 +98,7 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
 
 3. **File Integrity Checks:**
    - Every uploaded file is hashed using SHA256, and the hash is stored for verification.
+   - "Refresh" (administrators) re-hashes a folder's stored files against their records: a file that differs is flagged in red, a missing one in yellow, and both are logged. The records are never changed. `bin/check-integrity.php` checks the whole storage from the command line.
 
 4. **Dynamic Collaboration:**
    - Add or revoke access for contributors dynamically during investigations.
@@ -113,6 +114,7 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
 
 2. **Upload Evidence Files:**
    - Users with upload permissions can securely upload files.
+   - **Files too large for the browser, or placed in storage another way** (copied with `rsync`, from a disk of an air-gapped host, restored from a backup) are imported with **Refresh**. Copy them into the folder's directory in storage (`base_storage_directory` + the folder's path; create the directory if the folder has none yet), wait until the copy is complete, then open the folder in DFIR FM as an administrator and choose Refresh, then Start. Each new file is hashed from storage and recorded, as uploaded by you from your address and marked "imported"; new subdirectories become folders without access rights of their own. Refresh covers the open folder only: open each subfolder to refresh it. Not imported, with the reason shown: symbolic links, special files, names the application doesn't accept, a name already used, and content already in the folder. A file still being copied while it's hashed is skipped: refresh again once the copy is done. The copied files must be readable by the web server user.
 
 3. **Manage Access:**
    - Admins can assign or revoke access rights for directories, e.g. let the case's contributors see each other's files by giving its default group the read right.

@@ -9,16 +9,16 @@ The application uses a single entrypoint: `index.php`. It handles routing manual
 Command-line tools live in `bin/` and refuse to run outside the CLI SAPI:
 - `php bin/create-admin.php <username>`: creates an administrator (or resets an existing user's password, lifts a lock, and adds them to the admin group) and prints a random password once. This is how the first administrator is created; no default account exists. It's also the break-glass tool when every administrator is locked out: it needs shell access only, and no identity provider.
 - `php bin/send-test-mail.php <recipient>`: sends a test e-mail through the configured mail engine, exactly as invitations are sent. Exit code 0 when the engine accepted the message, 1 with the reason on stderr otherwise. With `mail_engine=none` it sends nothing, says so and exits 0. Run it as the web server user (e.g. `sudo -u www-data php bin/send-test-mail.php …`) to also check its permissions.
-- `php bin/check-integrity.php`: re-hashes every stored file and compares it with its `files` record (SHA-256 and size). Also reports `files` rows that share a name or a SHA-256 in one directory, rows that refer to a missing row (`PRAGMA foreign_key_check`), and, with the local storage engine, files in storage without a record. Read-only; exit code 0 when everything matches, 1 otherwise.
+- `php bin/check-integrity.php`: re-hashes every stored file and compares it with its `files` record (SHA-256 and size). Also reports `files` rows that share a name or a SHA-256 in one directory, rows that refer to a missing row (`PRAGMA foreign_key_check`), and, with a storage engine that has named files (local), what the storage holds without a record: files (`ORPHAN`), symbolic links and special files, folders it can't read (`UNREADABLE`), and a record stored as a symbolic link (`LINK`). It walks the storage through the engine (`Services\DirectoryRefresh::walk()`). The database or log file configured inside the storage is printed on a `RESERVED` line, not counted as a problem (see *Storage engine*). The whole storage, read-only; the file manager's "Refresh" does one folder and records what it finds (see *Refresh from storage*). Exit code 0 when everything matches, 1 otherwise.
 - `php bin/report-domain-groups.php`: lists the `<domain> users` groups left by invitations made before default groups (DFM-01), with their members and the folders they have rights on, and flags those whose members share several folders. Review and split them from the admin page; the script changes nothing. Read-only; exit code 0, 2 on error.
 - `php bin/find-deleted-user.php <email>`: lists the deleted accounts of an e-mail address (see *Deleted accounts*), with their id, so that `files.uploaded_by`, `directories.created_by` and the log can be searched by id. Read-only; each lookup is logged with the hash of the address, not the address. Exit code 0 when an account was found, 1 otherwise.
-- `php bin/expire-uploads.php`: expires uploads without activity for `upload_stale_after` seconds and deletes their staging files. The application also does this whenever an upload starts; the script is for a cron job.
+- `php bin/expire-uploads.php`: expires uploads without activity for `upload_stale_after` seconds and deletes their staging files, and expires refresh jobs left as long. The application also does this whenever an upload or a refresh starts; the script is for a cron job.
 
 Routes (`index.php`). Authentication and CSRF checks are global, in `index.php`: every route but `/login` requires a session (otherwise a redirect to `login?redirect=…`), and every POST a valid CSRF token. Authorization (admin, folder rights) is checked by each controller action, through `AccessMiddleware`. POST requests select their action with the field `a`.
 
 | Path | Controller | Purpose |
 |---|---|---|
-| `/` | `FileManagerController` | GET: folder listing (`?p=/path`). POST: `createFolder`, `deleteItem` |
+| `/` | `FileManagerController` | GET: folder listing (`?p=/path`). POST: `createFolder`, `deleteItem`; `refresh`, `refreshStep`, `refreshStatus`, `refreshCancel` (`RefreshController`, admins only; see "Refresh from storage") |
 | `/dl` | `DownloadController` | File download, with `Range` |
 | `/upload` | `UploadController` | Chunked upload (see "Upload protocol") |
 | `/admin` | `AdminController` | Admin page and its actions (users, groups, invitations, access rights); admins only |
@@ -80,6 +80,7 @@ project-root/
 │   │   ├── LoginController.php
 │   │   ├── LogoutController.php
 │   │   ├── ProfileController.php
+│   │   ├── RefreshController.php # "Refresh from storage" actions of the file manager
 │   │   └── UploadController.php
 │   ├── Core/
 │   │   ├── App.php            # Singleton pattern to store $db, $config and $logger
@@ -94,7 +95,11 @@ project-root/
 │   │   └── SecurityMiddleware.php
 │   ├── Services/
 │   │   ├── ChunkedUpload.php  # Upload state machine, verification, commit
-│   │   └── UploadException.php # Refusal with HTTP status and error code
+│   │   ├── UploadException.php # Refusal with HTTP status and error code
+│   │   ├── DirectoryRefresh.php # Storage against records: one folder, or the whole tree
+│   │   ├── RefreshJobs.php    # Refresh jobs: import, re-hash, flag
+│   │   ├── RefreshException.php
+│   │   └── NameRules.php      # File and folder name rules
 │   └── Views/                 # Templates for rendering HTML
 │       ├── Modals/            # Bootstrap modals
 │       │   ├── AccessRightsModal.php
@@ -103,6 +108,7 @@ project-root/
 │       │   ├── NewFolderModal.php
 │       │   ├── OperationResultModal.php
 │       │   ├── ProfileModal.php
+│       │   ├── RefreshModal.php
 │       │   ├── UploadModal.php
 │       │   └── UserGroupModal.php
 │       ├── AdminView.php
@@ -114,7 +120,8 @@ project-root/
 ├── storage/                   # Created at runtime, not in git; must not be web-accessible
 │   ├── database/              # SQLite database files
 │   │   └── app.sqlite         # Main SQLite database (default; database_path)
-│   ├── files/                 # Storage for uploaded files (local storage engine)
+│   ├── files/                 # Storage for uploaded files: base_storage_directory=storage/files,
+│   │                          #   never storage/ itself, which holds the database
 │   │   └── .uploads/          # Staging: uploads in progress (reserved name)
 │   └── logs/                  # Log files (file log engine)
 ├── vendor/                    # Composer dependencies (auto-generated)
@@ -160,8 +167,8 @@ composer test:unit       # fast, no server
 composer test:feature    # HTTP-level, ~1 min
 ```
 
-- **`tests/Unit/`**: no web server. Client IP resolution, config parsing and `database_path`, `Content-Disposition`, Range parsing, login redirect targets, storage path validation and staging, backend factories, log records, mail engine configuration and message building, schema and migrations, admin checks, throttle settings, and the upload state machine (`ChunkedUploadTest`: chunks out of order or sent twice, missing chunks, tampered staging, name and content conflicts, rights, geometry, sizes, abort), on a real SQLite database and local storage in a temporary directory.
-- **`tests/Feature/`**: the application over HTTP: login and rate limiting, sessions and cookies, admin authorization, account deletion, file listing, uploads and downloads, mail, HTTP headers and routing, the `bin/` scripts, `database_path`. Each test starts a fresh, isolated instance on PHP's built-in server (`Tests\Support\TestServer`) in a temporary directory, with its own `.env`, SQLite database, storage, log file and APCu counters. The project's own `.env`, database and storage are never touched.
+- **`tests/Unit/`**: no web server. Client IP resolution, config parsing and `database_path`, `Content-Disposition`, Range parsing, login redirect targets, storage path validation and staging, backend factories, log records, mail engine configuration and message building, schema and migrations, admin checks, throttle settings, the upload state machine (`ChunkedUploadTest`: chunks out of order or sent twice, missing chunks, tampered staging, name and content conflicts, rights, geometry, sizes, abort), the storage listing and reserved paths, the name rules, and the refresh from storage (`DirectoryRefreshTest`, `RefreshJobsTest`: import, mismatch, missing, refused names, symlinks, duplicates, cancel, progress, stalled steps), on a real SQLite database and local storage in a temporary directory.
+- **`tests/Feature/`**: the application over HTTP: login and rate limiting, sessions and cookies, admin authorization, account deletion, file listing, uploads and downloads, the refresh from storage and its markers in the listing, reserved paths, mail, HTTP headers and routing, the `bin/` scripts, `database_path`. Each test starts a fresh, isolated instance on PHP's built-in server (`Tests\Support\TestServer`) in a temporary directory, with its own `.env`, SQLite database, storage, log file and APCu counters. The project's own `.env`, database and storage are never touched.
   - Fixtures: an admin created through `bin/create-admin.php` and a regular user `bob@test.local`. The root directory (id 1) is created by the schema setup, as on a real install.
   - `tests/Support/router.php` mirrors `.htaccess` for the built-in server, so `.htaccess` itself still needs checking on a real Apache.
   - `Tests\Support\HttpClient` behaves like a browser: it keeps cookies and handles the CSRF token and login form.
@@ -241,15 +248,17 @@ The logger is globally available via `App::getLogger()` and all controller-level
 - Uploads: `upload_start`, `upload_verifying`, `upload_completed` (with size and SHA-256), `upload_name_conflict`, `upload_duplicate_refused`, `upload_denied`, `upload_chunk_rejected`, `upload_failed`, `upload_aborted`, `upload_expired`, `upload_verify_restarted`
 - Downloads: `download_success`, `download_partial`, `download_failure`
 - Folders and files: `directory_created`, `directory_deleted`, `file_deleted`, `filemanager_failure` (a missing folder requested)
+- Refresh from storage: `directory_refresh_started` (with `refresh_id`, `directory` and the number of `files` to hash), `directory_imported` (a new subfolder recorded), `file_imported` (with `file`, `file_id`, `size`, `sha256` and the file's `mtime` in storage, UTC), `integrity_mismatch` (with `recorded_size`, `stored_size`, `recorded_sha256`, `stored_sha256`), `integrity_missing` (the record's `size` and `sha256`), `directory_refreshed` (the counts: `new_folders`, `imported`, `verified`, `mismatches`, `missing`, `skipped`, `failed`, `remaining`), `directory_refresh_canceled` (same counts), `directory_refresh_expired`, `directory_refresh_step_restarted`, `directory_refresh_denied` (not an administrator)
 - Administration: `user_invited` (with `directory`, the `group` joined or null, `delivery`: `mail` or `manual`, and `invitation_sent`; the link itself is never logged), `invitation_resent` (same fields, without group), `user_locked`, `user_unlocked`, `user_deleted` (with `target_user_id` and `pseudonym`), `group_created` (with `default_group_of` when an invitation created it), `group_deleted` (with the number of `members` it had), `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
 - Mail failures: `mail_send_failure`
 - Configuration: `config_warning` (with `setting` and `message`; see *Client IP resolution*)
-- Command line: `cli_admin_created` (`bin/create-admin.php`, also when it resets a password), `cli_test_mail_sent` and `cli_deleted_user_lookup` (with `address_hash` and the account ids found), with `username` set to `cli:` + the system user; `upload_expired` from `bin/expire-uploads.php`, without a username
+- Command line: `cli_admin_created` (`bin/create-admin.php`, also when it resets a password), `cli_test_mail_sent` and `cli_deleted_user_lookup` (with `address_hash` and the account ids found), with `username` set to `cli:` + the system user; `upload_expired` and `directory_refresh_expired` from `bin/expire-uploads.php`, without a username
 
 **Forensic constraints:**
 - Every uploaded file is assembled in staging, then SHA-256-hashed by reading it back from storage, and only then moved to its final path and recorded with its real size. A partial or unverified file is never visible
 - A name that already exists in a folder is refused, never overwritten or appended to; the same content twice in one folder is refused too (unique indexes back both rules)
 - File metadata (upload timestamp, user, and origin IP) is persisted in the database
+- A file placed in storage outside the application enters the records only through "Refresh from storage", by an administrator: hashed from storage like an upload, recorded with `origin = 'import'`, the administrator as uploader and their address as origin, and its storage mtime in the log. A stored file that no longer matches its record is flagged (`files.integrity`) and logged; the record, which is the evidence, is never changed
 - File deletion is logged
 - All access control decisions are enforced via middleware (see `AccessMiddleware`)
 
@@ -353,6 +362,7 @@ Database initialization is handled programmatically in `src/Core/Database.php`.
 
 - **v5:** adds `users.session_version` (immediate revocation of sessions). Sessions opened before v5 match the default 0 and stay valid.
 - **v6:** adds `users.locked_at` / `locked_by`. A lock used to be recorded only as `password = '!'` with `token_expiry = 0`, which can't be told from an invitee whose link expired unused; those accounts get `locked_at` (the migration time, UTC) and lose any leftover token.
+- **v7:** adds `files.origin` (`upload` for every existing file), `files.integrity` and `files.checked_at` (refresh from storage). The `refresh_jobs` and `refresh_job_files` tables come from `createSchema()`.
 
 To add a migration, add a `if ($version < N)` block in `migrate()` that ends with `PRAGMA user_version = N`. Back up the database file (`database_path`, by default `storage/database/app.sqlite`) before upgrading.
 
@@ -420,6 +430,9 @@ CREATE TABLE IF NOT EXISTS 'files' (
     uploaded_from TEXT,
     size INTEGER NOT NULL DEFAULT (0),
     sha256 TEXT,
+    origin TEXT NOT NULL DEFAULT 'upload',  -- or 'import': found in storage by a refresh
+    integrity TEXT CHECK (integrity IN ('mismatch', 'missing')), -- the last refresh's finding; NULL: as recorded
+    checked_at DATETIME,                    -- UTC, last re-hash or check by a refresh
     FOREIGN KEY (uploaded_by) REFERENCES users(id),
     FOREIGN KEY (directory_id) REFERENCES directories(id)
 );
@@ -465,6 +478,36 @@ CREATE TABLE upload_chunks (           -- chunks received; deleted when the uplo
     PRIMARY KEY (upload_id, chunk_index),
     FOREIGN KEY (upload_id) REFERENCES uploads(id) ON DELETE CASCADE
 );
+CREATE TABLE refresh_jobs (            -- "Refresh from storage", kept once ended for the audit trail
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,           -- the administrator; only they can drive the job
+    directory_id INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('in_progress', 'completed', 'canceled', 'expired')),
+    new_folders INTEGER NOT NULL DEFAULT 0, -- counts from the comparison
+    missing INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    current_file TEXT,                  -- being hashed
+    hashed_bytes INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_update DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (directory_id) REFERENCES directories(id) ON DELETE CASCADE
+);
+CREATE TABLE refresh_job_files (       -- the files of a job, in hashing order, with their result
+    job_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    file_id INTEGER,                    -- the record of an existing file (no foreign key); NULL: new
+    size INTEGER NOT NULL,              -- as listed in storage
+    mtime INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'hashing', 'imported', 'verified', 'mismatch', 'skipped', 'failed')),
+    sha256 TEXT,
+    reason TEXT,
+    PRIMARY KEY (job_id, position),
+    FOREIGN KEY (job_id) REFERENCES refresh_jobs(id) ON DELETE CASCADE
+);
+CREATE INDEX refresh_jobs_active ON refresh_jobs(status, directory_id);
 ```
 
 ## Upload protocol
@@ -507,6 +550,39 @@ As on every route, an expired session gets a redirect to the login page and a re
 
 **Client** (`filemanager.js`): `forceChunking`, 2 MiB chunks, one at a time, `retryChunks` ×3. Dropzone's `accept` hook sends `checkRights`; `chunksUploaded` sends `complete` and polls `status` every second, showing "Verifying stored file… n%". If the `complete` response is lost (e.g. a proxy timeout on a long verification), the polls deliver the outcome. Dropzone's `canceled` event sends `abort`. A refusal's message stays visible under the file's preview.
 
+## Refresh from storage
+
+For files placed in a folder's storage outside the application (large images copied with `rsync`, a disk from an air-gapped host, a restore from backup), and to check a folder's stored files against their records. Administrators only, on a storage engine with named files; the direct content of the current folder only (a subfolder is refreshed by opening it). `Controllers\RefreshController` for HTTP, `Services\RefreshJobs` for the jobs, `Services\DirectoryRefresh` for the comparison (shared with `bin/check-integrity.php`).
+
+`POST /` with the CSRF token and the field `a`. Every response is JSON with `Cache-Control: no-store`: `{"success":true,…}`, or a 4xx/5xx status and `{"success":false,"code":…,"message":…}`.
+
+| `a` | Fields | Success |
+|---|---|---|
+| `refresh` | `cwd` | The job (below) and `comparison`: `new_folders` (names, recorded at once), `new_files` and `existing_files` (`name`, `size`), `missing_files` (flagged at once), `skipped` (`name`, `type`, `reason`) |
+| `refreshStep` | `refresh_id` | Hashes the next file inside the request (no time limit; it goes on if the client leaves). The job, with `file`: this step's result (`position`, `name`, `kind`: `new` or `existing`, `status`, `size`, `sha256`, `reason`), or null, and `busy`: true while another request hashes a file of the job |
+| `refreshStatus` | `refresh_id`, `after` | The job, with `files`: the results of the files done after position `after` |
+| `refreshCancel` | `refresh_id` | The job, `canceled`; the step in progress stops, the remaining files are left as they are |
+
+The job: `refresh_id`, `status` (`in_progress`, `completed`, `canceled`, `expired`), `directory`, `total` (files to hash), `counts` (`new_folders`, `imported`, `verified`, `mismatches`, `missing`, `skipped`, `failed`, `remaining`) and `current` (`name`, `size`, `hashed_bytes`, or null).
+
+| Status | Codes |
+|---|---|
+| 400 | `InvalidArgument` (a `cwd` that isn't a path, a missing or invalid `refresh_id`) |
+| 403 | `Forbidden` (not an administrator; logged as `directory_refresh_denied`) |
+| 404 | `NoSuchFolder`, `NoSuchRefresh` (unknown, or another administrator's) |
+| 409 | `RefreshRunning` (with its `refresh_id`), `NotSupported` (an engine without named files) |
+| 500 | `StorageError`, `InternalError` |
+
+**Server behaviour:**
+- The comparison lists the folder in storage (`listDirectory()`) and reads its `files` and `directories` rows. Ignored and reported, with a reason: symbolic links, special files, names refused by the name rules (a subfolder must pass both the folder and the file rules: `NameRules`), and an entry whose name a record of the other kind uses (a file where a folder is recorded, or the reverse). The staging folder and the reserved paths never appear.
+- New subfolders are recorded at once (`created_by` the administrator, `created_from` their address, no access rights of their own), missing files flagged (`integrity = 'missing'`, record kept), and the job lists the files to hash: new ones first, then existing ones.
+- Each step hashes one file read through `readStream()`, with its progress in the job row (every 16 MiB or second), then, in one `BEGIN IMMEDIATE` transaction:
+  - a new file is recorded with its hashed size and SHA-256, `origin = 'import'`, the administrator as uploader, unless its size changed since the listing (still being copied), its name was taken meanwhile, or the folder already holds the same content (D2, D6): then skipped, with the reason;
+  - an existing file is compared with its record: equal, `verified` (and any earlier flag cleared); different, `mismatch` (`integrity = 'mismatch'`), the record unchanged. `checked_at` is set either way.
+- One refresh per folder at a time. A job without activity for 120 s was left (page closed) and is replaced by a new refresh (`expired`); a step without progress for 120 s died and is restarted by the next `refreshStep`. Jobs without activity for `upload_stale_after` seconds expire (when a refresh starts, or with `bin/expire-uploads.php`).
+
+**Client** (`filemanager.js`, `RefreshModal`): the "Refresh" toolbar item opens a dialog that explains the operation and starts it on demand. It shows the comparison, then calls `refreshStep` until the job ends, polling `refreshStatus` every second meanwhile for the progress bar; a step cut by a proxy timeout (Cloudflare's 100 s, see *Behind Cloudflare Tunnel*) goes on on the server and the polls deliver its result. While a job runs the dialog has Stop (`refreshCancel`) and no Close (static backdrop, no Escape), and leaving the page asks for confirmation. Closing it reloads the listing, where `FileManagerView::fileFlags()` marks imported files, mismatches (red row) and missing files (yellow row), with the last check's date in the tooltip.
+
 ## Backends
 
 The application uses an Interface/Factory pattern to dynamically select backends.
@@ -526,6 +602,11 @@ All engines send UTF-8 HTML with a plain-text alternative (`MailText::fromHtml()
 Storage engine can be :
 - Local for the local filesystem (`base_storage_directory` must be an existing directory)
 - Amazon S3 and Azure Blob storage: planned, not implemented. `storage_engine=amazon_s3|azure_blob` is refused with an explicit error.
+
+All access to the storage goes through the engine (`StorageEngineFactory::create()`); no other class touches the storage's file system. Code that needs a folder tree asks the engine, never the `storage_engine` setting:
+- `supportsNamedFiles()`: whether stored elements have names in a folder tree that can be browsed (local: yes; a blob store such as S3 has keys only). The refresh from storage and the orphan search of `bin/check-integrity.php` need it.
+- `listDirectory($path)`: the direct entries of one folder, sorted by name, each with `name`, `type` (`file`, `directory`, `link`, `other`), `size` (files) and `mtime`. Symbolic links are reported, never followed (`lstat()`); the staging folder is left out. A folder with nothing stored lists as empty: folders are created in storage with their first file and pruned with their last. An engine without named files throws `LogicException`.
+- **Reserved paths:** the factory passes the database file, its directory and the log file (with `log_engine=file`). Those inside the storage are refused by every engine method (`Reserved path`), left out of listings, and refused to uploads and "New folder" through `isReserved()`; `reservedPaths()` lists them for warnings. A reserved file also covers its companions (SQLite's `-wal`, `-shm`, `-journal`; rotated logs `.1`, `.2.gz`), a reserved directory its content. A configuration that keeps them apart, as the README asks, has none.
 
 Besides reading, uploads need a **staging** area (`stagingCreate`, `stagingWriteAt`, `stagingSize`, `stagingOpen`, `stagingCommit`, `stagingRemove`), keyed by 32 hex digits generated by the application. `stagingWriteAt` writes a chunk at its offset, so a chunk written twice leaves the same content. `stagingCommit` moves the staged element to its final path and must never replace an existing element. The local engine stages in `.uploads/` under its root, on the same filesystem, so the commit is an atomic `rename()`; that name is reserved in the root folder (and folder names can't start with a dot).
 
@@ -610,7 +691,7 @@ A checklist for publishing the container through `cloudflared` (from `CODE_AUDIT
 - [ ] **HSTS** at the edge (SSL/TLS → Edge Certificates: HSTS, Always Use HTTPS): the application doesn't send `Strict-Transport-Security` itself, since it can't know whether it is only served over HTTPS.
 - [ ] **Rate limiting rules**: on `POST /login` (e.g. 20 requests per minute per IP; the application has its own limits, per IP and per username, which this complements), and on `/upload` with a threshold above what a legitimate upload needs: one request per 2 MiB chunk, so about 6 per second on a 100 Mbit/s uplink (360 per minute), plus one status poll per second per file being verified.
 - [ ] **WAF and Bot Fight Mode**: check that they don't challenge the application's `fetch` requests (chunk uploads, status polls): a challenge answers HTML instead of JSON, which the upload dialog reports as an error.
-- [ ] **Limits of the plan**: the request body limit (100 MB on Free and Pro) is far above the 2 MiB chunks. The 100-second origin timeout (time to the first byte of the answer) cuts a `complete` request whose verification takes longer (`524`): the client treats this as a cut request and the status polls deliver the outcome, while the verification goes on in the container. Downloads send their headers at once, so they aren't affected.
+- [ ] **Limits of the plan**: the request body limit (100 MB on Free and Pro) is far above the 2 MiB chunks. The 100-second origin timeout (time to the first byte of the answer) cuts a `complete` request whose verification takes longer (`524`): the client treats this as a cut request and the status polls deliver the outcome, while the verification goes on in the container. A refresh step on a large file is cut the same way and recovered the same way (`refreshStatus`). Downloads send their headers at once, so they aren't affected.
 
 **Host**
 - [ ] The container's port published on `127.0.0.1` only (the compose file's default), so that only `cloudflared` reaches it.
@@ -637,6 +718,7 @@ Each backend is responsible for parsing its configuration from the `.env` file.
 
 - Database migrations are minimal (`PRAGMA user_version` steps in `Database::migrate()`), with no down-migrations
 - Only the local storage engine exists (Azure Blob and S3: #6, #7)
+- Refresh from storage: one folder at a time, not its subfolders; a missing file's record can't be forgotten from the UI; jobs belong to the administrator who started them
 - Session idle timeout hardcoded to 1 hour; no absolute lifetime (#16)
 - Password changes aren't logged, and the profile dialog doesn't ask for the current password
 - No forgotten-password reset (#1); the Logs tab of the admin page is empty (#23)
