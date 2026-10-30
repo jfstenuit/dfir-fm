@@ -98,11 +98,11 @@ final class LogEngineTeeTest extends TestCase
     public function testSchemaVersionAndWal(): void
     {
         $pdo = $this->events()->pdo();
-        $this->assertSame(1, (int)$pdo->query('PRAGMA user_version')->fetchColumn());
+        $this->assertSame(2, (int)$pdo->query('PRAGMA user_version')->fetchColumn());
         $this->assertSame('wal', $pdo->query('PRAGMA journal_mode')->fetchColumn());
-        $this->assertSame(['archives', 'events'], $pdo->query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")->fetchAll(\PDO::FETCH_COLUMN));
+        $this->assertSame(['archives', 'events', 'store'], $pdo->query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")->fetchAll(\PDO::FETCH_COLUMN));
         // A second open finds the schema in place
-        $this->assertSame(1, (int)$this->events()->pdo()->query('PRAGMA user_version')->fetchColumn());
+        $this->assertSame(2, (int)$this->events()->pdo()->query('PRAGMA user_version')->fetchColumn());
     }
 
     public function testCsvWithNullAndNestedValues(): void

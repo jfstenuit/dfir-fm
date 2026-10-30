@@ -14,7 +14,13 @@ class EventStore
     /** Milliseconds a write waits for another request's lock (D29: a timeout is a failure) */
     public const BUSY_TIMEOUT_MS = 5000;
 
-    private const SCHEMA_VERSION = 1;
+    private const SCHEMA_VERSION = 2;
+
+    /** When the store started receiving events (UTC, as the records write it) */
+    public static function createdAt(PDO $pdo): string
+    {
+        return $pdo->query("SELECT value FROM store WHERE key = 'created_at'")->fetchColumn();
+    }
 
     public static function open(string $path): PDO
     {
@@ -69,6 +75,16 @@ class EventStore
     purged_by TEXT
                 )");
                 $pdo->exec('PRAGMA user_version = 1');
+            }
+            // v2: when the store started receiving events. Older events can
+            // only come from log files written before (bin/import-log.php);
+            // a store created before v2 started with its oldest event
+            if ((int)$pdo->query('PRAGMA user_version')->fetchColumn() < 2) {
+                $pdo->exec('CREATE TABLE IF NOT EXISTS store (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+                $first = $pdo->query('SELECT MIN(ts) FROM events')->fetchColumn();
+                $pdo->prepare("INSERT OR IGNORE INTO store (key, value) VALUES ('created_at', :at)")
+                    ->execute([':at' => $first ?: gmdate('c')]);
+                $pdo->exec('PRAGMA user_version = 2');
             }
             $pdo->exec('COMMIT');
         } catch (\Throwable $e) {
