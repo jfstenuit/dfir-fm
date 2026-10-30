@@ -71,6 +71,14 @@ class AdminController
             self::listEventActions($config);
         } elseif ($action === "exportEvents") {
             self::exportEvents($config);
+        } elseif ($action === "listArchives") {
+            self::listArchives($config);
+        } elseif ($action === "archivePreview") {
+            self::archivePreview($config);
+        } elseif ($action === "archiveEvents") {
+            self::archiveEvents($config);
+        } elseif ($action === "purgeArchive") {
+            self::purgeArchive($config);
         } else {
             // Render the admin view
             $users=[]; $groups=[]; $accessRights=[];
@@ -894,27 +902,8 @@ class AdminController
 
         header('Content-Type: ' . ($format === 'csv' ? 'text/csv; charset=UTF-8' : 'application/x-ndjson; charset=UTF-8'));
         header('Content-Disposition: ' . Response::contentDisposition($name));
-        set_time_limit(0);
-        ignore_user_abort(true);
-        while (ob_get_level() > 0) {
-            ob_end_flush();
-        }
-
-        // Sent by blocks of 64 KiB; the client going away is only seen when a block is sent
-        $buffer = '';
-        $send = function () use (&$buffer): bool {
-            echo $buffer;
-            flush();
-            $buffer = '';
-            return connection_aborted() === 0;
-        };
-        $result = self::eventLog($config)->export($filters, $format, function (string $line) use (&$buffer, $send) {
-            $buffer .= $line;
-            return strlen($buffer) < 65536 || $send();
-        });
-        if ($buffer !== '' && !$send()) {
-            $result['complete'] = false;
-        }
+        $log = self::eventLog($config);
+        $result = self::stream(fn(callable $write) => $log->export($filters, $format, $write));
 
         App::getLogger()->log('logs_exported', [
             'filters' => (object)$filters,
@@ -925,6 +914,138 @@ class AdminController
             'last_event_id' => $result['last_event_id'],
             'complete' => $result['complete'],
         ]);
+    }
+
+    /** Answer a refused archive request as JSON */
+    private static function refuse(int $status, string $message): void
+    {
+        header('Content-Type: application/json');
+        http_response_code($status);
+        echo json_encode(['success' => false, 'message' => $message]);
+    }
+
+    /** The archive cutoff of a request (`before`, UTC), or null after answering 400 */
+    private static function archiveCutoff(): ?string
+    {
+        try {
+            $before = EventLog::filters(['until' => $_POST['before'] ?? ''])['until'] ?? null;
+        } catch (\InvalidArgumentException) {
+            $before = null;
+        }
+        if ($before === null) {
+            self::refuse(400, 'Give the date and time to archive the events before.');
+        }
+        return $before;
+    }
+
+    private static function listArchives(array $config)
+    {
+        header('Content-Type: application/json');
+        echo json_encode(['success' => true, 'archives' => self::eventLog($config)->archives()]);
+    }
+
+    /** How many events an archive before `before` would hold (asked before the download) */
+    private static function archivePreview(array $config)
+    {
+        $before = self::archiveCutoff();
+        if ($before === null) {
+            return;
+        }
+        header('Content-Type: application/json');
+        echo json_encode(['success' => true, 'before_ts' => $before, 'events' => self::eventLog($config)->countBefore($before)]);
+    }
+
+    /**
+     * Archive (D28): download every event before `before` as JSONL, oldest
+     * first, by a form POST as exportEvents. The archive is recorded with
+     * its count and SHA-256 once the file is sent completely; only then can
+     * it be purged. Logged as events_archived.
+     */
+    private static function archiveEvents(array $config)
+    {
+        $before = self::archiveCutoff();
+        if ($before === null) {
+            return;
+        }
+        $log = self::eventLog($config);
+        try {
+            $archive = $log->startArchive($before, Session::getUser()['username'] ?? '');
+        } catch (\DomainException $e) {
+            self::refuse(409, $e->getMessage());
+            return;
+        }
+
+        header('Content-Type: application/x-ndjson; charset=UTF-8');
+        header('Content-Disposition: ' . Response::contentDisposition($archive['file']));
+        $result = self::stream(fn(callable $write) => $log->writeArchive($archive, $write));
+        // After the last block: only an archive the client received completely can be purged
+        $log->finishArchive($archive, $result);
+
+        App::getLogger()->log('events_archived', [
+            'archive_id' => $archive['id'],
+            'before_ts' => $before,
+            'max_event_id' => $archive['max_event_id'],
+            'file' => $archive['file'],
+            'events' => $result['events'],
+            'sha256' => $result['sha256'],
+            'complete' => $result['complete'],
+        ]);
+    }
+
+    /** Purge (D28): delete the events of one complete archive, if unchanged since */
+    private static function purgeArchive(array $config)
+    {
+        $id = $_POST['id'] ?? '';
+        if (!is_string($id) || !ctype_digit($id)) {
+            self::refuse(400, 'Invalid archive.');
+            return;
+        }
+        try {
+            $archive = self::eventLog($config)->purge((int)$id, Session::getUser()['username'] ?? '');
+        } catch (\DomainException $e) {
+            self::refuse(409, $e->getMessage());
+            return;
+        }
+        App::getLogger()->log('events_purged', [
+            'archive_id' => $archive['id'],
+            'before_ts' => $archive['before_ts'],
+            'max_event_id' => $archive['max_event_id'],
+            'events' => $archive['events'],
+            'sha256' => $archive['sha256'],
+            'file' => $archive['file'],
+        ]);
+        header('Content-Type: application/json');
+        echo json_encode(['success' => true, 'archive' => $archive]);
+    }
+
+    /**
+     * Send a file built line by line ($produce gets the writer), by blocks
+     * of 64 KiB. The script goes on if the client goes away, so the caller
+     * still logs what happened (complete: false); the client going away is
+     * only seen when a block is sent.
+     */
+    private static function stream(callable $produce): array
+    {
+        set_time_limit(0);
+        ignore_user_abort(true);
+        while (ob_get_level() > 0) {
+            ob_end_flush();
+        }
+        $buffer = '';
+        $send = function () use (&$buffer): bool {
+            echo $buffer;
+            flush();
+            $buffer = '';
+            return connection_aborted() === 0;
+        };
+        $result = $produce(function (string $line) use (&$buffer, $send) {
+            $buffer .= $line;
+            return strlen($buffer) < 65536 || $send();
+        });
+        if ($buffer !== '' && !$send()) {
+            $result['complete'] = false;
+        }
+        return $result;
     }
 
     private static function listEventActions(array $config)

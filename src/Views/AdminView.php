@@ -8,6 +8,7 @@ use Views\Modals\ProfileModal;
 use Views\Modals\UserGroupModal;
 use Views\Modals\InvitationLinkModal;
 use Views\Modals\EventRecordModal;
+use Views\Modals\ArchiveModal;
 
 class AdminView
 {
@@ -179,6 +180,9 @@ class AdminView
         <div class="d-flex align-items-center gap-3">
           <button type="button" class="btn btn-sm btn-outline-primary d-none" id="logsMore">Load more</button>
           <span class="text-muted small" id="logsCount" aria-live="polite"></span>
+          <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" data-bs-toggle="modal" data-bs-target="#archiveModal">
+            <i class="bi bi-archive" aria-hidden="true"></i> Archive and purge…
+          </button>
         </div>
       </div>
     </div>
@@ -189,6 +193,7 @@ DeleteConfirmationModal::render();
 UserGroupModal::render();
 InvitationLinkModal::render();
 EventRecordModal::render();
+ArchiveModal::render();
 ProfileModal::render('');
 ?>
 </body>

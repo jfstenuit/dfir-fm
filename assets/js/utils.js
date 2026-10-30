@@ -212,6 +212,20 @@ export function icon(name, extraClass = '') {
     return h('i', { class: `bi bi-${name}${extraClass ? ' ' + extraClass : ''}`, 'aria-hidden': 'true' });
 }
 
+/**
+ * Download what a POST answers (an attachment) through a hidden form, with
+ * the CSRF token as a field. Unlike api(), the browser streams the file to
+ * disk instead of holding it in memory; the page stays as it is.
+ */
+export function postDownload(url, fields) {
+    const all = { ...fields, csrf_token: getCsrfToken() ?? '' };
+    const form = h('form', { method: 'post', action: url, class: 'd-none' },
+        Object.entries(all).map(([name, value]) => h('input', { type: 'hidden', name, value })));
+    document.body.append(form);
+    form.submit();
+    form.remove();
+}
+
 export function debounce(fn, delay) {
     let timer;
     return (...args) => {

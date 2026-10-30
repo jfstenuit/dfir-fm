@@ -63,6 +63,45 @@ final class EventLogTest extends TestCase
         $this->assertSame(['events' => 0, 'sha256' => hash('sha256', ''), 'last_event_id' => null, 'complete' => true], $result);
     }
 
+    public function testAnArchiveNotSentCompletelyIsDropped(): void
+    {
+        $archive = $this->log->startArchive('2026-09-02T00:00:00+00:00', 'ann');
+        $this->assertSame([], $this->log->archives(), 'not listed while it is being sent');
+        $this->assertPurgeRefused($archive['id'], 'No archive');
+
+        $result = $this->log->writeArchive($archive, fn() => false);
+        $this->log->finishArchive($archive, $result);
+        $this->assertSame([], $this->log->archives());
+        $this->assertPurgeRefused($archive['id'], 'No archive');
+
+        // A complete one is listed and can be purged
+        $archive = $this->log->startArchive('2026-09-02T00:00:00+00:00', 'ann');
+        $out = '';
+        $this->log->finishArchive($archive, $this->log->writeArchive($archive, function ($line) use (&$out) {
+            $out .= $line;
+            return true;
+        }));
+        $this->assertSame([[$archive['id'], 5, hash('sha256', $out)]],
+            array_map(fn($a) => [$a['id'], $a['events'], $a['sha256']], $this->log->archives()));
+        $this->assertSame('ann', $this->log->purge($archive['id'], 'ann')['purged_by']);
+    }
+
+    public function testNothingToArchive(): void
+    {
+        $this->expectException(\DomainException::class);
+        $this->log->startArchive('2020-01-01T00:00:00+00:00', 'ann');
+    }
+
+    private function assertPurgeRefused(int $id, string $message): void
+    {
+        try {
+            $this->log->purge($id, 'ann');
+            $this->fail('purge accepted');
+        } catch (\DomainException $e) {
+            $this->assertStringContainsString($message, $e->getMessage());
+        }
+    }
+
     public function testUnknownFormatRefused(): void
     {
         $this->expectException(\InvalidArgumentException::class);

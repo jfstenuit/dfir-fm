@@ -4,7 +4,8 @@
 // the last one shown (keyset paging), so events logged meanwhile never shift
 // a page. A new search is logged by the server (logs_viewed); paging isn't.
 
-import { api, getCsrfToken, h, icon, on, showModal, showResultMessage } from './utils.js';
+import { api, h, icon, on, postDownload, showModal, showResultMessage } from './utils.js';
+import * as archives from './admin-archives.js';
 
 const byId = id => document.getElementById(id);
 let bound = false;
@@ -33,6 +34,8 @@ export function init() {
     });
     byId('copyEventRecord').addEventListener('click', copyRecord);
     on('#logsFilterForm', 'click', '[data-format]', (event, item) => exportEvents(item.dataset.format));
+    // Purged events leave the list: search again
+    archives.init(() => search());
 }
 
 /** Called each time the tab is shown */
@@ -86,18 +89,9 @@ async function loadPage(first = false) {
     }
 }
 
-/**
- * Download the events of the search shown (not the form's unsearched
- * edits), all pages, oldest first. A form POST rather than api(): the
- * browser streams the file to disk instead of holding it in memory.
- */
+/** Download the events of the search shown (not the form's unsearched edits), all pages, oldest first */
 function exportEvents(format) {
-    const fields = { a: 'exportEvents', format, csrf_token: getCsrfToken() ?? '', ...filters };
-    const form = h('form', { method: 'post', action: 'admin', class: 'd-none' },
-        Object.entries(fields).map(([name, value]) => h('input', { type: 'hidden', name, value })));
-    document.body.append(form);
-    form.submit();
-    form.remove();
+    postDownload('admin', { a: 'exportEvents', format, ...filters });
 }
 
 /** Fields shown in their own column, left out of the details */

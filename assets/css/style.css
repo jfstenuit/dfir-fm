@@ -136,11 +136,13 @@ button.badge {
   border: var(--bs-border-width) solid var(--bs-border-color);
   border-radius: var(--bs-border-radius-sm);
 }
-#logsTable {
+#logsTable,
+#archivesTable {
   table-layout: auto;
   margin: 0 0 1rem;
 }
-#logsTab .table-responsive {
+#logsTab .table-responsive,
+#archiveModal .table-responsive {
   margin-top: 0;
 }
 /* Rows open the full record */
