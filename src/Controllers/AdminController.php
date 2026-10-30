@@ -8,9 +8,12 @@ use Core\Request;
 use Core\Response;
 use Core\Session;
 use Core\App;
+use Core\Config;
+use Core\EventStore;
 use Backends\MailEngineFactory;
 use Views\InvitationView;
 use Views\AdminView;
+use Services\EventLog;
 use PDO;
 
 class AdminController
@@ -62,6 +65,10 @@ class AdminController
             self::listGroupsWithDetails($config, $db);
         } elseif ($action === "deleteGroup") {
             self::deleteGroup($config, $db);
+        } elseif ($action === "listEvents") {
+            self::listEvents($config);
+        } elseif ($action === "listEventActions") {
+            self::listEventActions($config);
         } else {
             // Render the admin view
             $users=[]; $groups=[]; $accessRights=[];
@@ -816,6 +823,49 @@ class AdminController
         App::getLogger()->log('group_deleted', ['group' => $groupName, 'members' => $members]);
 
         echo json_encode(['success' => $success]);
+    }
+
+    /** The events database, read through its own connection (D27), never App::getDb() */
+    private static function eventLog(array $config): EventLog
+    {
+        return new EventLog(EventStore::open(Config::eventsDatabasePath($config, BASE_PATH)));
+    }
+
+    /**
+     * Logs tab: one page of events, newest first. A new query (no `before`)
+     * is logged as logs_viewed with its filters; "load more" is not, so
+     * paging doesn't flood the log.
+     */
+    private static function listEvents(array $config)
+    {
+        header('Content-Type: application/json');
+
+        $before = $_POST['before'] ?? '';
+        $limit = $_POST['limit'] ?? '';
+        try {
+            $filters = EventLog::filters($_POST);
+            if (!is_string($before) || ($before !== '' && !ctype_digit($before))
+                || !is_string($limit) || ($limit !== '' && !ctype_digit($limit))) {
+                throw new \InvalidArgumentException('Invalid page.');
+            }
+        } catch (\InvalidArgumentException $e) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+            return;
+        }
+
+        $page = self::eventLog($config)->page($filters, $before === '' ? null : (int)$before,
+                                              $limit === '' ? EventLog::PAGE_SIZE : (int)$limit);
+        if ($before === '') {
+            App::getLogger()->log('logs_viewed', ['filters' => (object)$filters]);
+        }
+        echo json_encode(['success' => true] + $page);
+    }
+
+    private static function listEventActions(array $config)
+    {
+        header('Content-Type: application/json');
+        echo json_encode(['success' => true, 'actions' => self::eventLog($config)->actions()]);
     }
 
     /**

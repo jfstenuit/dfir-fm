@@ -220,8 +220,23 @@ final class TestServer
     /** @return list<array> rows of the events database, oldest first */
     public function events(): array
     {
-        $pdo = new \PDO("sqlite:$this->eventsDatabasePath", null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
-        return $pdo->query('SELECT * FROM events ORDER BY id')->fetchAll(\PDO::FETCH_ASSOC);
+        return $this->eventsDb()->query('SELECT * FROM events ORDER BY id')->fetchAll(\PDO::FETCH_ASSOC);
+    }
+
+    /** Store an event as the application would (ts, action, then the context), for fixtures */
+    public function addEvent(string $ts, string $action, array $context = []): int
+    {
+        $entry = ['ts' => $ts, 'action' => $action] + $context + ['ip' => '127.0.0.1', 'username' => null];
+        $this->eventsDb()->prepare('INSERT INTO events (ts, action, username, ip, peer_ip, record)
+                                    VALUES (:ts, :action, :username, :ip, :peer_ip, :record)')
+            ->execute([':ts' => $ts, ':action' => $action, ':username' => $entry['username'], ':ip' => $entry['ip'],
+                       ':peer_ip' => $entry['peer_ip'] ?? null, ':record' => \Backends\LogEntry::encode($entry)]);
+        return (int)$this->eventsDb()->lastInsertId();
+    }
+
+    private function eventsDb(): \PDO
+    {
+        return \Core\EventStore::open($this->eventsDatabasePath);
     }
 
     /** @return list<array> application log entries for one action */

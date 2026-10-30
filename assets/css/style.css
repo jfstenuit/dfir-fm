@@ -126,6 +126,40 @@ button.badge {
   cursor: pointer;
 }
 
+/* Logs tab (admin-logs.js). The generic rules above (input[type="text"],
+   fixed table layout, table margins) would make two filters taller than
+   their neighbours, squeeze the columns on a phone instead of scrolling the
+   table, and push the table 4rem below the filters */
+#logsFilterForm input[type="text"] {
+  padding: .25rem .5rem;
+  font-size: .875rem;
+  border: var(--bs-border-width) solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius-sm);
+}
+#logsTable {
+  table-layout: auto;
+  margin: 0 0 1rem;
+}
+#logsTab .table-responsive {
+  margin-top: 0;
+}
+/* Rows open the full record */
+#logsTable .event-row {
+  cursor: pointer;
+}
+#logsTable .event-details {
+  max-width: 40rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: .85em;
+}
+.event-record {
+  max-height: 60vh;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* Dropzone centres its success/error marks on the whole preview, which the
    stage line below makes taller: centre them on the 120px thumbnail instead */
 .dropzone .dz-preview .dz-success-mark,

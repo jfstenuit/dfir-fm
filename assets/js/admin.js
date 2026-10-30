@@ -8,10 +8,10 @@ import { updatePassword } from './utils.js';
 const loaders = {};   // tab pane id => load()
 
 export async function init() {
-    const [users, groups] = await Promise.all([import('./admin-users.js'), import('./admin-groups.js')]);
+    const [users, groups, logs] = await Promise.all([import('./admin-users.js'), import('./admin-groups.js'), import('./admin-logs.js')]);
     loaders.usersTab = users.load;
     loaders.groupsTab = groups.load;
-    // logsTab: not implemented yet
+    loaders.logsTab = logs.load;
 
     const links = document.querySelectorAll('[data-bs-toggle="tab"]');
     links.forEach(link => link.addEventListener('shown.bs.tab', event => loadTab(event.target)));
