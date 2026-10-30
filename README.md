@@ -8,7 +8,7 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
 ---
 
 ## Key Features
-- **Traceability:** Every action is logged and traceable to an individual, ensuring accountability.
+- **Traceability:** Every action is logged and traceable to an individual, ensuring accountability. Administrators search, export and archive the events from the admin page; if an event can't be logged, the application stops until logging works again.
 - **Granular Access Control:** Enforce access rights at the directory level to maintain data confidentiality and security.
 - **Support for Large Files:** Upload and manage large files with seamless chunked uploads.
 - **File Integrity:** Automatically calculates and stores the SHA256 hash for all uploaded files.
@@ -49,14 +49,16 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
      cp env.sample .env
      sudo chgrp www-data .env && chmod 640 .env
      ```
-   - Edit the `.env` file to configure your settings (mail, storage directory, database and log paths, reverse proxy). The storage directory must exist; it and the directories of the database and the log file must be writable by the web server user and not web-accessible.
-   - **Keep the database and the log file out of the storage directory.** The storage directory holds the evidence and nothing else: give it a directory of its own, not a parent of the database's or the log's. Beware of the defaults: the database is `storage/database/app.sqlite` unless `database_path` says otherwise, so `base_storage_directory=storage` would put it inside. For example:
+   - Edit the `.env` file to configure your settings (mail, storage directory, database and log paths, reverse proxy). The storage directory must exist; it and the directories of the databases and the log file must be writable by the web server user and not web-accessible.
+   - **Logs:** every event is stored in the events database (`events_database_path`), which the admin page's Logs tab reads. `log_engine` adds a copy: a log file (`file`, the default), `syslog`, `stderr`, or `none` when the Logs tab is enough. Back up the events database like the application database: it is the audit trail.
+   - **Keep the databases and the log file out of the storage directory.** The storage directory holds the evidence and nothing else: give it a directory of its own, not a parent of the databases' or the log's. Beware of the defaults: the database is `storage/database/app.sqlite` and the events database `storage/events/events.sqlite` unless `database_path` and `events_database_path` say otherwise, so `base_storage_directory=storage` would put them inside. For example:
      ```
      base_storage_directory=/srv/dfir-fm/files
      database_path=/srv/dfir-fm/database/app.sqlite
+     events_database_path=/var/log/dfir-fm/events.sqlite
      log_file_path=/var/log/dfir-fm/dfir-fm.log
      ```
-     If they are inside anyway, the application protects them: their paths are reserved (uploads and new folders with those names are refused, and "Refresh from storage" doesn't offer to import them), and `bin/check-integrity.php` prints a `RESERVED` line. But an operator who copies, restores or re-hashes the storage then handles the live database and log along with the evidence. Moving them: stop the web server, move the files, update `.env`, start it again.
+     If they are inside anyway, the application protects them: their paths are reserved (uploads and new folders with those names are refused, and "Refresh from storage" doesn't offer to import them), and `bin/check-integrity.php` prints a `RESERVED` line. But an operator who copies, restores or re-hashes the storage then handles the live databases and log along with the evidence. Moving them: stop the web server, move the files, update `.env`, start it again.
    - Check that the web server refuses `.env` (and the rest of the application's files): `.htaccess` blocks them, but only if Apache reads it (`AllowOverride All` for the application's directory, and `mod_rewrite` enabled):
      ```bash
      curl -s -o /dev/null -w '%{http_code}\n' https://your.host/dfir-fm/.env   # 404 (or 403) expected
@@ -74,8 +76,13 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
      sudo -u www-data php bin/create-admin.php you@yourdomain.com
      ```
    - Optionally, add a cron job that expires abandoned uploads (the application also does it when an upload starts), and run `php bin/check-integrity.php` from time to time to re-hash the stored files against the database.
+   - **Upgrading from a version without the events database:** the events logged before it existed are in the log file only. To see them in the Logs tab too, import the log file and its rotated copies (`.gz` included, in any order; running it twice imports nothing):
+     ```bash
+     sudo -u www-data php bin/import-log.php /var/log/dfir-fm/dfir-fm.log*
+     ```
+     CSV logs (`log_format=csv`) can't be read back; keep them as they are.
 
-4. (Optional) Run the application with Docker Compose instead (no `composer install` needed on the host). Its configuration is `docker/.env`: copy `env.sample` there, customize it as in step 3 and uncomment its "Docker" section. The three paths of the file (files, database, log) are ignored: the container keeps them under `/data`, and the "Docker" section chooses what is mounted there: `files_dir` and `log_dir`, host directories; left empty, Docker volumes. The database is always in a volume. The container's web server user is uid/gid 82, or `uid` and `gid` if set: set them to the owner of the host directories to mount them as they are.
+4. (Optional) Run the application with Docker Compose instead (no `composer install` needed on the host). Its configuration is `docker/.env`: copy `env.sample` there, customize it as in step 3 and uncomment its "Docker" section. The paths of the file (files, databases, log) are ignored: the container keeps them under `/data`, and the "Docker" section chooses what is mounted there: `files_dir` and `log_dir`, host directories; left empty, Docker volumes. The database is always in a volume. The events database is in `log_dir` (or its volume), with the log file: back it up, it is the audit trail. `log_engine=none` keeps the events database only; `log_engine=stderr` also sends the events to the container output. The container's web server user is uid/gid 82, or `uid` and `gid` if set: set them to the owner of the host directories to mount them as they are.
    ```bash
    cp env.sample docker/.env      # then edit it
    chmod 640 docker/.env           # with uid/gid unset: sudo chgrp 82 docker/.env, and directories owned by 82
@@ -103,7 +110,12 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
 4. **Dynamic Collaboration:**
    - Add or revoke access for contributors dynamically during investigations.
 
-5. **Invitations:**
+5. **Audit Log:**
+   - Every event (logins, uploads with size and SHA-256, downloads, deletions, rights changes, invitations) is stored in the events database. The admin page's **Logs** tab searches it by time, action, user, IP or any text (a file name, a SHA-256), shows each event's full record, and exports a search as JSONL or CSV; viewing and exporting are logged too.
+   - **No logging, no service:** if an event can't be logged (full disk, unwritable log), the application stops serving (HTTP 503) until logging works again, then records how long it was stopped. The action being logged when it happened stays done.
+   - Events are kept until an administrator archives them (a JSONL file of every event before a date, with its SHA-256, for cold storage) and then purges that archive. The purge deletes exactly the archived events, only if they are unchanged since. `bin/archive-events.php` does the same from the command line.
+
+6. **Invitations:**
    - Contributors are invited into a case folder (never the root) and join that folder's default group, `<folder> contributors`, which gets upload-only access when created. The invitation link is single-use, valid one hour, and asks the contributor to choose a password (at least 12 characters).
    - Links are sent by mail (local sendmail, SMTP or SendGrid) or, with `mail_engine=none`, shown to the administrator to pass on.
    - "Resend invitation" (Users tab) sends a new link, which also serves as a password reset; Lock / Unlock / Delete manage the account.
@@ -123,7 +135,7 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
    - SHA256 hashes ensure the integrity of all uploaded files.
 
 5. **Audit Actions:**
-   - Every action is logged, providing a detailed audit trail.
+   - Every action is logged, providing a detailed audit trail. In the admin page's Logs tab, search the case's events (e.g. the text of the case folder's path, or a file's SHA-256) and export them to attach to the case file: the export's SHA-256 is logged, so the file can be matched to the log.
 
 ---
 

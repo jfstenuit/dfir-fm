@@ -13,6 +13,8 @@ Command-line tools live in `bin/` and refuse to run outside the CLI SAPI:
 - `php bin/report-domain-groups.php`: lists the `<domain> users` groups left by invitations made before default groups (DFM-01), with their members and the folders they have rights on, and flags those whose members share several folders. Review and split them from the admin page; the script changes nothing. Read-only; exit code 0, 2 on error.
 - `php bin/find-deleted-user.php <email>`: lists the deleted accounts of an e-mail address (see *Deleted accounts*), with their id, so that `files.uploaded_by`, `directories.created_by` and the log can be searched by id. Read-only; each lookup is logged with the hash of the address, not the address. Exit code 0 when an account was found, 1 otherwise.
 - `php bin/expire-uploads.php`: expires uploads without activity for `upload_stale_after` seconds and deletes their staging files, and expires refresh jobs left as long. The application also does this whenever an upload or a refresh starts; the script is for a cron job.
+- `php bin/archive-events.php --list | --before <date> --out <file> | --purge <id>`: archives the events before a date to a JSONL file and purges an archive, as the Logs tab does (see *Archive and purge*). For a cron job or a cold storage handled on the server. `--out` must not exist yet. Exit code 0, 1 when refused, 2 on a usage or configuration error.
+- `php bin/import-log.php <file>...`: imports JSONL log files written before the events database existed (see *Importing older log files*). Exit code 0, 1 when a file is refused, 2 on a usage or configuration error.
 
 Routes (`index.php`). Authentication and CSRF checks are global, in `index.php`: every route but `/login` requires a session (otherwise a redirect to `login?redirect=…`), and every POST a valid CSRF token. Authorization (admin, folder rights) is checked by each controller action, through `AccessMiddleware`. POST requests select their action with the field `a`.
 
@@ -21,7 +23,7 @@ Routes (`index.php`). Authentication and CSRF checks are global, in `index.php`:
 | `/` | `FileManagerController` | GET: folder listing (`?p=/path`). POST: `createFolder`, `deleteItem`; `refresh`, `refreshStep`, `refreshStatus`, `refreshCancel` (`RefreshController`, admins only; see "Refresh from storage") |
 | `/dl` | `DownloadController` | File download, with `Range` |
 | `/upload` | `UploadController` | Chunked upload (see "Upload protocol") |
-| `/admin` | `AdminController` | Admin page and its actions (users, groups, invitations, access rights); admins only |
+| `/admin` | `AdminController` | Admin page and its actions (users, groups, invitations, access rights; Logs tab: `listEvents`, `listEventActions`, `exportEvents`, `listArchives`, `archivePreview`, `archiveEvents`, `purgeArchive`); admins only |
 | `/profile` | `ProfileController` | `updatePassword` |
 | `/login` | `LoginController` | Two-step password login; the invitation link's password form (`setPassword`) |
 | `/logout` | `LogoutController` | |
@@ -44,6 +46,8 @@ project-root/
 │       ├── admin.js           # Admin page entry: tabs, password change
 │       ├── admin-users.js     # Admin: user management
 │       ├── admin-groups.js    # Admin: group management
+│       ├── admin-logs.js      # Admin: Logs tab (search, record, export)
+│       ├── admin-archives.js  # Admin: Logs tab, archive and purge dialog
 │       ├── login.js           # Login page
 │       └── set-password.js    # Invitation link page: set a password
 ├── tests/                     # PHPUnit tests (see "Testing")
@@ -57,7 +61,9 @@ project-root/
 │   ├── check-integrity.php    # Re-hash stored files against the database
 │   ├── find-deleted-user.php  # Deleted accounts of an e-mail address
 │   ├── report-domain-groups.php # Groups of older invitations, to review
-│   └── expire-uploads.php     # Expire abandoned uploads (cron)
+│   ├── expire-uploads.php     # Expire abandoned uploads (cron)
+│   ├── archive-events.php     # Archive events to a file, purge an archive
+│   └── import-log.php         # Import log files written before the events database
 ├── .dockerignore              # Build context of the image: only what it needs
 ├── docker/                    # Container deployment (see "Docker")
 │   ├── Dockerfile             # PHP-FPM 8.4 (Alpine) + APCu + lighttpd
@@ -68,8 +74,11 @@ project-root/
 │   └── start.sh               # Runs both processes; stops when either exits
 ├── src/                       # Source code directory
 │   ├── Backends/              # Dynamically selected backends
-│   │   ├── LogEngine*.php     # Handles logging
-│   │   ├── LogEntry.php       # The log record shared by the log engines
+│   │   ├── LogEngine*.php     # Logging: the tee, the events database, the file/syslog/stderr copies
+│   │   ├── LogDestination.php # One place events are written to
+│   │   ├── LogHalt.php        # The halt flag when an event can't be logged (D29)
+│   │   ├── LogWriteException.php
+│   │   ├── LogEntry.php       # The log record shared by the destinations
 │   │   ├── MailEngine*.php    # Handles mail sending
 │   │   ├── MailText.php       # Plain-text alternative of the HTML mails
 │   │   └── StorageEngine*.php # Handles backend storage
@@ -86,6 +95,7 @@ project-root/
 │   │   ├── App.php            # Singleton pattern to store $db, $config and $logger
 │   │   ├── Config.php
 │   │   ├── Database.php
+│   │   ├── EventStore.php     # The events database: connection and schema
 │   │   ├── PasswordPolicy.php # The password rule (12 characters, never trimmed)
 │   │   ├── Request.php
 │   │   ├── Response.php
@@ -99,11 +109,15 @@ project-root/
 │   │   ├── DirectoryRefresh.php # Storage against records: one folder, or the whole tree
 │   │   ├── RefreshJobs.php    # Refresh jobs: import, re-hash, flag
 │   │   ├── RefreshException.php
-│   │   └── NameRules.php      # File and folder name rules
+│   │   ├── NameRules.php      # File and folder name rules
+│   │   ├── EventLog.php       # Events database: search, export, archive, purge
+│   │   └── EventImport.php    # Import of older log files
 │   └── Views/                 # Templates for rendering HTML
 │       ├── Modals/            # Bootstrap modals
 │       │   ├── AccessRightsModal.php
+│       │   ├── ArchiveModal.php    # Logs tab: archive and purge
 │       │   ├── DeleteConfirmationModal.php
+│       │   ├── EventRecordModal.php # Logs tab: one event's full record
 │       │   ├── InviteModal.php
 │       │   ├── NewFolderModal.php
 │       │   ├── OperationResultModal.php
@@ -123,6 +137,8 @@ project-root/
 │   ├── files/                 # Storage for uploaded files: base_storage_directory=storage/files,
 │   │                          #   never storage/ itself, which holds the database
 │   │   └── .uploads/          # Staging: uploads in progress (reserved name)
+│   ├── events/                # The events database (default; events_database_path)
+│   │   └── events.sqlite
 │   └── logs/                  # Log files (file log engine)
 ├── vendor/                    # Composer dependencies (auto-generated)
 ├── composer.json              # Composer configuration file
@@ -138,7 +154,7 @@ project-root/
 ## Development & Debugging
 
 - Set up Apache (`mod_rewrite`, `AllowOverride` for `.htaccess`; `mod_headers` recommended) with PHP 8.4 and the extensions `pdo_sqlite`, `apcu`, `curl`, `gmp` (required by `sendgrid/sendgrid`) and `mbstring`, then `composer install`. Or use the Docker image (see "Docker"). Other web servers need the `.htaccess` rules translated, as `docker/lighttpd.conf` does for lighttpd.
-- Two kinds of logs: the application's events (logins, uploads, downloads, admin actions) go to the log engine (`log_engine`, see "Logging & Forensic Integrity"); PHP errors and configuration problems go to the PHP error log.
+- Two kinds of logs: the application's events (logins, uploads, downloads, admin actions) go to the events database and to the log engine's copy (`log_engine`, see "Logging & Forensic Integrity"); PHP errors, configuration problems and logging failures go to the PHP error log.
 - No framework or build system is used at this time.
 - JavaScript and CSS files are managed manually (see "Front end").
 
@@ -167,8 +183,8 @@ composer test:unit       # fast, no server
 composer test:feature    # HTTP-level, ~1 min
 ```
 
-- **`tests/Unit/`**: no web server. Client IP resolution, config parsing and `database_path`, `Content-Disposition`, Range parsing, login redirect targets, storage path validation and staging, backend factories, log records, mail engine configuration and message building, schema and migrations, admin checks, throttle settings, the upload state machine (`ChunkedUploadTest`: chunks out of order or sent twice, missing chunks, tampered staging, name and content conflicts, rights, geometry, sizes, abort), the storage listing and reserved paths, the name rules, and the refresh from storage (`DirectoryRefreshTest`, `RefreshJobsTest`: import, mismatch, missing, refused names, symlinks, duplicates, cancel, progress, stalled steps), on a real SQLite database and local storage in a temporary directory.
-- **`tests/Feature/`**: the application over HTTP: login and rate limiting, sessions and cookies, admin authorization, account deletion, file listing, uploads and downloads, the refresh from storage and its markers in the listing, reserved paths, mail, HTTP headers and routing, the `bin/` scripts, `database_path`. Each test starts a fresh, isolated instance on PHP's built-in server (`Tests\Support\TestServer`) in a temporary directory, with its own `.env`, SQLite database, storage, log file and APCu counters. The project's own `.env`, database and storage are never touched.
+- **`tests/Unit/`**: no web server. Client IP resolution, config parsing and `database_path`, `Content-Disposition`, Range parsing, login redirect targets, storage path validation and staging, backend factories, log records, mail engine configuration and message building, schema and migrations, admin checks, throttle settings, the upload state machine (`ChunkedUploadTest`: chunks out of order or sent twice, missing chunks, tampered staging, name and content conflicts, rights, geometry, sizes, abort), the storage listing and reserved paths, the name rules, the refresh from storage (`DirectoryRefreshTest`, `RefreshJobsTest`: import, mismatch, missing, refused names, symlinks, duplicates, cancel, progress, stalled steps), and the events database (`LogEngineTeeTest`: one record for every destination, the halt and its recovery; `EventLogTest`: export, archives; `EventImportTest`), on a real SQLite database and local storage in a temporary directory.
+- **`tests/Feature/`**: the application over HTTP: login and rate limiting, sessions and cookies, admin authorization, account deletion, file listing, uploads and downloads, the refresh from storage and its markers in the listing, reserved paths, mail, the events database and the halt (`EventLogTest`), the Logs tab (`LogsTabTest`, `LogsExportTest`, `LogsArchiveTest`), HTTP headers and routing, the `bin/` scripts, `database_path`. Each test starts a fresh, isolated instance on PHP's built-in server (`Tests\Support\TestServer`) in a temporary directory, with its own `.env`, SQLite database, storage, log file and APCu counters. The project's own `.env`, database and storage are never touched.
   - Fixtures: an admin created through `bin/create-admin.php` and a regular user `bob@test.local`. The root directory (id 1) is created by the schema setup, as on a real install.
   - `tests/Support/router.php` mirrors `.htaccess` for the built-in server, so `.htaccess` itself still needs checking on a real Apache.
   - `Tests\Support\HttpClient` behaves like a browser: it keeps cookies and handles the CSRF token and login form.
@@ -238,11 +254,9 @@ Future improvements may include:
 
 ## Logging & Forensic Integrity
 
-The application now includes a **pluggable logging backend system**, abstracted via `LogEngineInterface`. 
+Every event is written to the **events database** (D27), a SQLite file of its own (`events_database_path`, see *Events database*), separate from the application database: the log never shares a resource with the control plane (users, rights, files). The admin page's Logs tab reads it, whatever `log_engine` is. `log_engine` adds a copy: `file`, `syslog`, `stderr`, or `none` for no copy. A forward-only destination (syslog, stderr into a container log) can't be read back, but its events stay viewable in the Logs tab.
 
-Log engines are configured via `.env` using the `log_engine` key.
-
-The logger is globally available via `App::getLogger()` and all controller-level events are expected to log security-sensitive actions. Every record carries `ts` (UTC), `action` (the event), `username`, the client `ip` (and `peer_ip`, see *Client IP resolution*), plus the event's own fields. Events logged today:
+The logger is globally available via `App::getLogger()`: a `LogEngineTee` that builds each record once (`LogEntry::build()`) and writes the same record, `ts` included, to the events database, then to the configured engine (`LogEngineFactory::create()`). All controller-level events are expected to log security-sensitive actions. Every record carries `ts` (UTC), `action` (the event), `username`, the client `ip` (and `peer_ip`, see *Client IP resolution*), plus the event's own fields. Events logged today:
 
 - Login and logout: `login_password_success`, `login_password_failure`, `login_token_success` (after the invitation form, once logged in), `login_token_failure` (with `cause`: `unknown`, `used`, `wrong`, `expired`, and `step`: `link` or `password`), `password_changed` (with `via`: `invitation` or `profile`), `logout`, `session_revoked` (with `cause`: `deleted`, `missing`, or `revoked` for a lock or a password change)
 - Uploads: `upload_start`, `upload_verifying`, `upload_completed` (with size and SHA-256), `upload_name_conflict`, `upload_duplicate_refused`, `upload_denied`, `upload_chunk_rejected`, `upload_failed`, `upload_aborted`, `upload_expired`, `upload_verify_restarted`
@@ -252,7 +266,18 @@ The logger is globally available via `App::getLogger()` and all controller-level
 - Administration: `user_invited` (with `directory`, the `group` joined or null, `delivery`: `mail` or `manual`, and `invitation_sent`; the link itself is never logged), `invitation_resent` (same fields, without group), `user_locked`, `user_unlocked`, `user_deleted` (with `target_user_id` and `pseudonym`), `group_created` (with `default_group_of` when an invitation created it), `group_deleted` (with the number of `members` it had), `group_user_added`, `group_user_removed`, `access_granted`, `access_revoked`, `admin_access_denied`
 - Mail failures: `mail_send_failure`
 - Configuration: `config_warning` (with `setting` and `message`; see *Client IP resolution*)
-- Command line: `cli_admin_created` (`bin/create-admin.php`, also when it resets a password), `cli_test_mail_sent` and `cli_deleted_user_lookup` (with `address_hash` and the account ids found), with `username` set to `cli:` + the system user; `upload_expired` and `directory_refresh_expired` from `bin/expire-uploads.php`, without a username
+- Logs tab: `logs_viewed` (each new search, with its `filters`; "Load more" is not logged), `logs_exported` (`filters`, `format`, `file`, `events`, `sha256` of the file, `last_event_id`, `complete`), `events_archived` (`archive_id`, `before_ts`, `max_event_id`, `file`, `events`, `sha256`, `complete`), `events_purged` (same fields, without `complete`), `events_imported` (`bin/import-log.php`, per file: `file`, `sha256`, and the counts `imported`, `already_stored`, `too_recent`, `purged_period`, `malformed`)
+- Logging itself: `logging_failure` (`failed_from`, `failed_until`, `failures` per destination, `message`: "logging failed between … and … - application was stopped"), written when the application resumes after a halt (see *No logging, no service*)
+- Command line: `cli_admin_created` (`bin/create-admin.php`, also when it resets a password), `cli_test_mail_sent` and `cli_deleted_user_lookup` (with `address_hash` and the account ids found), `events_archived`, `events_purged` and `events_imported`, with `username` set to `cli:` + the system user; `upload_expired` and `directory_refresh_expired` from `bin/expire-uploads.php`, without a username
+
+**No logging, no service (D29).** A forensic application that can't record what it does stops doing anything:
+- At startup, `healthCheck()` requires the events database to be writable (and the log file's directory with `log_engine=file`); otherwise every request gets a 500.
+- At runtime, every destination reports a failed write instead of ignoring it (an insert that throws, including a lock not obtained within `busy_timeout`, 5 s; `file_put_contents`, `syslog()` or the write to stderr returning short). A forward-only engine can only report a local failure.
+- The tee still writes the event to the other destinations, then sets a **halt flag** in APCu (memory: it works with a full disk; keyed by installation), writes the failure to PHP's error log and throws `LogWriteException`. The request ends with a 503 (JSON `code: logging_failed` for POST requests, a page otherwise; nothing if the answer had started, e.g. a download). The action during which the event was logged may already be done (an upload concluded) and stays done: a log call inside a transaction (`ChunkedUpload`, `RefreshJobs`) commits what was done before letting the exception through, since a rollback would leave events of changes undone. `UploadController` and `RefreshController` let it through to `index.php`'s exception handler.
+- While the flag is set, every request gets the 503 page before doing anything.
+- **Recovery is automatic.** At most once per 30 s (`LogHalt::PROBE_INTERVAL`, one request through `apcu_add`), a request writes the `logging_failure` event to every destination that doesn't hold it yet. When all of them took it, the flag is cleared and the application serves again; the gap is on the record with its start and end. To recover, fix the destination (disk space, permissions, a lock held by a `sqlite3` shell, syslog); the PHP error log says which one failed and why. Restarting PHP clears the flag too, and with it the start time (still in the PHP error log).
+- Without APCu (#14) the halt can't outlast the request whose write failed.
+- CLI scripts have no halt: a failed write ends the script with a message on stderr and exit code 1 (`LogWriteException::handleInCli()`).
 
 **Forensic constraints:**
 - Every uploaded file is assembled in staging, then SHA-256-hashed by reading it back from storage, and only then moved to its final path and recorded with its real size. A partial or unverified file is never visible
@@ -340,13 +365,27 @@ Installations upgraded from invitations by e-mail domain (groups `<domain> users
 
 ---
 
-### 5. **Audit & Logs (Planned for Later, #23)**
+### 5. **Audit & Logs (#23)**
 | Feature | Description | Location |
 |--------|-------------|----------|
-| 📜 View User Actions | Filterable logs: uploads, downloads, logins | Admin UI, Logs tab (an empty placeholder today) |
-| 🧾 Group/Permission Changes | Audit trail for admin actions (access revokes, user changes) | Admin UI |
+| 📜 Browse events | Newest first, 100 at a time with "Load more" (keyset paging on the id: events logged meanwhile never shift a page). Filters: from (inclusive) and before (exclusive), UTC; action (from the actions present); username (exact); IP (client or relaying proxy); text anywhere in the record (a file name, a SHA-256; case-insensitive). A row opens the full record, as stored, with Copy | Admin UI, Logs tab |
+| ⬇️ Export | The events of the search shown, all pages, oldest first: JSONL (the records as stored, as in the log file) or CSV (`ts,action,username,ip,peer_ip,record`, RFC 4180). Streamed by a form POST; logged with the SHA-256 of the file | Admin UI, Logs tab |
+| 🗄️ Archive and purge | See *Archive and purge* | Admin UI, Logs tab; `bin/archive-events.php` |
 
-Until then, the events are in the log engine's output (see "Logging & Forensic Integrity").
+The search filters are checked by `EventLog::filters()`: a value sent as an array, a time that can't be read or a bad page parameter answers 400. A text search also finds the `logs_viewed` events of earlier searches for that text (their filters are in the record).
+
+#### Archive and purge
+
+Events are kept forever unless archived, then purged (D28):
+1. **Archive** (`archivePreview`, then `archiveEvents {before}`, a form POST). `EventLog::startArchive()` fixes the last event id before the cutoff and records the archive, not yet complete; the file `dfir-fm-archive-<id>_before_<cutoff>.jsonl` is streamed, oldest first; once the last block is sent, `finishArchive()` stores the count and the SHA-256 of the file. An archive whose client went away is removed: only a file the administrator could have received completely can be purged. Logged as `events_archived`.
+2. **Keep the file** in cold storage and check it against the SHA-256 shown.
+3. **Purge** (`purgeArchive {id}`), after confirming that the file is kept. In one `BEGIN IMMEDIATE` transaction, the archive's events are exported again into a hash (same query, same order, same bytes): the purge goes ahead only if the count and the SHA-256 are those of the archive, then deletes exactly those events (`id <= max_event_id AND ts < before_ts`) and records `purged_at`/`purged_by`. An event altered or deleted since, or an overlapping archive already purged, refuses it (409: make a new archive). Each archive is purged once. Logged as `events_purged`, after the commit (the logger's own connection would wait for this one's lock).
+
+Events stored later with an older time (an import) have higher ids and are never part of an earlier archive. The SQLite file doesn't shrink after a purge: its free pages are reused.
+
+#### Importing older log files
+
+`bin/import-log.php <file>...` brings into the events database the events of an installation upgraded from a version without one (`log_engine=file`, `log_format=jsonl`; rotated and `.gz` files accepted, in any order: files are sorted by their first event). Each line is stored exactly as read. Imported: the events older than the store's `created_at` (later ones were written live), not older than the cutoff of a purged archive (a purged period stays closed), and not already stored (same `ts` and same record), so a second run or overlapping files import nothing. A line that isn't a JSON object with a `ts` as the application writes it and an `action` is counted as malformed. A CSV log (`log_format=csv`: no field names, fields differing per action) is refused before anything is imported. Writes go by transactions of 500 rows, so live requests never wait long for the lock. Each file is logged as `events_imported`.
 
 
 ## Database Bootstrapping
@@ -510,6 +549,14 @@ CREATE TABLE refresh_job_files (       -- the files of a job, in hashing order, 
 CREATE INDEX refresh_jobs_active ON refresh_jobs(status, directory_id);
 ```
 
+## Events database
+
+`Core\EventStore::open()` opens the events database (`events_database_path`, default `storage/events/events.sqlite`; Docker `/data/logs/events.sqlite`), creating its directory (mode 0750) and schema, with `journal_mode=WAL` (the Logs tab reads while requests write) and `busy_timeout` 5 s. It is never reached through `App::getDb()`. Schema, versioned with its own `PRAGMA user_version`:
+- **v1:** `events (id, ts, action, username, ip, peer_ip, record)`, `record` being the JSON record exactly as the JSON engines write it (`LogEntry::encode()`: unescaped slashes, invalid UTF-8 replaced by U+FFFD rather than losing the event), with indexes on `ts`, `(action, ts)`, `(username, ts)` and `(ip, ts)`; `archives (id, before_ts, max_event_id, events, sha256, created_at, created_by, purged_at, purged_by)`, `sha256` empty while an archive is being sent.
+- **v2:** `store (key, value)` with `created_at`, when the store started receiving events (a v1 store takes its oldest event): the bound of `bin/import-log.php`.
+
+Inside the storage it is a reserved path, with its directory (see *Storage engine*). Back it up like the application database: it is the chain-of-custody record.
+
 ## Upload protocol
 
 Dropzone 6's chunked upload, with a server that makes it safe for evidence (`Controllers\UploadController` for HTTP, `Services\ChunkedUpload` for the logic). One endpoint, `POST /upload`, `multipart/form-data`, with the CSRF token in `X-CSRF-TOKEN`. The field `a` selects the action. Every response is JSON with `Cache-Control: no-store`.
@@ -606,16 +653,19 @@ Storage engine can be :
 All access to the storage goes through the engine (`StorageEngineFactory::create()`); no other class touches the storage's file system. Code that needs a folder tree asks the engine, never the `storage_engine` setting:
 - `supportsNamedFiles()`: whether stored elements have names in a folder tree that can be browsed (local: yes; a blob store such as S3 has keys only). The refresh from storage and the orphan search of `bin/check-integrity.php` need it.
 - `listDirectory($path)`: the direct entries of one folder, sorted by name, each with `name`, `type` (`file`, `directory`, `link`, `other`), `size` (files) and `mtime`. Symbolic links are reported, never followed (`lstat()`); the staging folder is left out. A folder with nothing stored lists as empty: folders are created in storage with their first file and pruned with their last. An engine without named files throws `LogicException`.
-- **Reserved paths:** the factory passes the database file, its directory and the log file (with `log_engine=file`). Those inside the storage are refused by every engine method (`Reserved path`), left out of listings, and refused to uploads and "New folder" through `isReserved()`; `reservedPaths()` lists them for warnings. A reserved file also covers its companions (SQLite's `-wal`, `-shm`, `-journal`; rotated logs `.1`, `.2.gz`), a reserved directory its content. A configuration that keeps them apart, as the README asks, has none.
+- **Reserved paths:** the factory passes the database file, the events database (D27), their directories, and the log file (with `log_engine=file`). Those inside the storage are refused by every engine method (`Reserved path`), left out of listings, and refused to uploads and "New folder" through `isReserved()`; `reservedPaths()` lists them for warnings. A reserved file also covers its companions (SQLite's `-wal`, `-shm`, `-journal`; rotated logs `.1`, `.2.gz`), a reserved directory its content. A configuration that keeps them apart, as the README asks, has none.
 
 Besides reading, uploads need a **staging** area (`stagingCreate`, `stagingWriteAt`, `stagingSize`, `stagingOpen`, `stagingCommit`, `stagingRemove`), keyed by 32 hex digits generated by the application. `stagingWriteAt` writes a chunk at its offset, so a chunk written twice leaves the same content. `stagingCommit` moves the staged element to its final path and must never replace an existing element. The local engine stages in `.uploads/` under its root, on the same filesystem, so the commit is an atomic `rename()`; that name is reserved in the root folder (and folder names can't start with a dot).
 
 ### Logging
 
-`log_engine` (`log_dest` is still accepted as an older name):
-- `file` (default): appends to `log_file_path`, one event per line, `log_format=jsonl` (default) or `csv`. The application refuses to serve requests (HTTP 500) if the file's directory isn't writable by the PHP user.
+The events database (`LogEngineEvents`) is always written. `log_engine` chooses a copy (`log_dest` is still accepted as an older name):
+- `none`: no copy, the events database only; `log_file_path` and `log_format` are ignored.
+- `file` (default): appends to `log_file_path`, one event per line, `log_format=jsonl` (default) or `csv`. The application refuses to serve requests (HTTP 500) if the file's directory isn't writable by the PHP user. The CSV is positional, without a header (null as an empty field, nested values as JSON): it can't be read back, so `bin/import-log.php` refuses it.
 - `syslog`: JSON, with the identity `syslog_tag` (default `dfir-fm`).
 - `stderr`: JSON lines on the PHP process's stderr; for containers (see "Docker").
+
+Each destination implements `LogDestination` (`name()`, `write(array $entry)`, which throws on any failure, and `healthCheck()`); `LogEngineTee` (the `LogEngineInterface` the application uses) writes to them and handles failures (see *No logging, no service*).
 
 ## Configuration
 
@@ -638,7 +688,7 @@ Besides reading, uploads need a **staging** area (`stagingCreate`, `stagingWrite
 | Database | `database_path` |
 | Uploads | `upload_max_size`, `upload_stale_after`, `upload_max_verifications` |
 | Security | `trusted_proxies`, `force_https`, `max_login_attempts`, `max_login_attempts_per_user`, `login_lockout_duration` |
-| Logging | `log_engine`, `log_file_path`, `log_format`, `syslog_tag` |
+| Logging | `events_database_path`, `log_engine`, `log_file_path`, `log_format`, `syslog_tag` |
 | Docker only (read by Compose, ignored by the application) | `uid`, `gid`, `http_port`, `files_dir`, `log_dir` |
 
 **Request size limits.** Uploads arrive in chunks of 2 MiB (set in `filemanager.js`), each in a `multipart/form-data` request a little larger than that. Every layer must accept such a request:
@@ -658,7 +708,7 @@ The largest file is set by `upload_max_size`, not by these limits.
 - **Routing:** `docker/lighttpd.conf` mirrors `.htaccess`: the same static allowlist, 404 for `storage/`, `src/`, `bin/`, `docker/`, `tests/`, dotfiles and the rest of `assets/` and `vendor/`, everything else to `index.php`. lighttpd has no default MIME types: the file lists one per served extension, including `.mjs` (browsers refuse a module script with another type).
 - **Configuration:** `docker/.env`, created by the administrator from `env.sample` (the same keys as a host install, plus its "Docker" section uncommented). It is not in git (`.gitignore`) and the repository ships no copy of it. It is mounted read-only as the application's `.env`; Compose refuses to start if it is missing, rather than creating a directory in its place. It must be readable by the container's `www-data`: uid/gid 82 (Alpine) by default, not the host's (33 on Debian), so `chgrp 82 docker/.env` with mode `640`; with `uid`/`gid` set (below), their owner. The file is read at each request, but the bind mount follows the file's inode: an editor that replaces the file (`sed -i`, some editors' save) leaves the container on the old one until `docker compose restart`. PHP-FPM passes the environment to PHP (`clear_env = no`), so a `DFIRFM_*` variable added to the compose file overrides a key.
 - **Compose reads `docker/.env` too:** it loads the `.env` of the compose file's directory for every command. Five keys, ignored by the application, choose the mounts, the port and the user: `files_dir`, `log_dir`, `http_port` (the host port, 8080 if unset), `uid` and `gid` (see "User"). A volume source that is an absolute path is a bind mount, a plain name is a named volume, so `${files_dir:-dfir-fm-files}` gives the host directory when the key is set and a volume otherwise. Compose expands `$` in unquoted or double-quoted values while reading the file: it only warns, the application still reads the file as written; single quotes avoid the warnings.
-- **Paths:** the image sets the three paths to its own locations, outside the web root, through `DFIRFM_*` variables, which win over the `.env`'s host paths:
+- **Paths:** the image sets the paths to its own locations, outside the web root, through `DFIRFM_*` variables, which win over the `.env`'s host paths:
 
   | Key | In the container | Mounted from |
   |---|---|---|
@@ -670,7 +720,7 @@ The largest file is set by `upload_max_size`, not by these limits.
   Host directories must exist before the first start: Docker would create a missing one owned by root, which the application can't write to (uploads and downloads then fail with a 500, "The storage is unavailable").
   Sessions live in the container's `/tmp`: a restart logs everyone out.
 - **User:** `uid` and `gid` (default 82, the image's) set the ids of the container's `www-data`, so that a host directory is mounted as it is, owned by its user (`id -u`, `id -g`), with no `chown` or ACL on the host. At start, as root, `start.sh` changes `www-data`'s ids (`usermod`/`groupmod`), then `chown -R`s the Docker volumes under `/data` that aren't owned by them yet (the database always; the files and the logs when they are volumes: Compose passes `files_dir` and `log_dir` as `APP_FILES_DIR` and `APP_LOG_DIR`). Host directories are never changed. lighttpd and the PHP-FPM workers then run as `www-data`; the code stays owned by root. 0, or a value that isn't a number, stops the container with a message.
-- **Logs:** with `log_engine=file` (the default), in `/data/logs`. With `log_engine=stderr` (in the `.env`, or as `DFIRFM_LOG_ENGINE` in the compose file to keep a file on a host install), the JSON events go to the container output through PHP-FPM (`log_limit` raised so that lines aren't cut). `syslog` has no daemon to talk to in the container. lighttpd's errors go to stderr and its access log to stdout. lighttpd opens its logs after dropping to `www-data`, who may not open the container's stdout or stderr by path (`/dev/stdout` fails or is silently lost): the error log is left unset (stderr as inherited) and the access log is a piped logger (`cat`, started before the drop) writing to fd 3, which `start.sh` points at its stdout.
+- **Logs:** the events database is in `/data/logs` (`events.sqlite`), whatever `log_engine` is; `log_engine=none` keeps nothing else. With `log_engine=file` (the default), the log file is there too. With `log_engine=stderr` (in the `.env`, or as `DFIRFM_LOG_ENGINE` in the compose file to keep a file on a host install), the JSON events go to the container output through PHP-FPM (`log_limit` raised so that lines aren't cut). `syslog` has no daemon to talk to in the container. lighttpd's errors go to stderr and its access log to stdout. lighttpd opens its logs after dropping to `www-data`, who may not open the container's stdout or stderr by path (`/dev/stdout` fails or is silently lost): the error log is left unset (stderr as inherited) and the access log is a piped logger (`cat`, started before the drop) writing to fd 3, which `start.sh` points at its stdout.
 - **Code:** owned by root and read-only for `www-data`, who only writes to `/data`. Dependencies are installed with `composer install --no-dev`. The image adds the `apcu` (pecl) and `gmp` (required by `sendgrid/sendgrid`) extensions.
 - **First administrator:** `docker compose exec -u www-data app php bin/create-admin.php you@yourdomain.com`.
 - **Workers:** `docker/php-fpm.conf` sets `pm.max_children = 20` (the base image's 5 is used up by a few concurrent downloads). Each download, each upload verification and each request in progress holds a worker for its duration: size it for concurrent downloads + concurrent verifications + a few for pages and status polls. An idle worker uses ~20–40 MB. `request_terminate_timeout` stays 0: verifying a large disk image takes longer than any fixed limit, and a killed verification restarts from zero.
@@ -706,7 +756,7 @@ Backends for storage and mail are dynamically chosen based on `.env` variables.
 
 - **Mail backends** must implement `MailEngineInterface`
 - **Storage backends** must implement `StorageEngineInterface`
-- **Logging backends** must implement `LogEngineInterface`
+- **Logging backends** must implement `LogDestination` and throw on any failed write (registered in `LogEngineFactory`, which puts them behind the events database)
 
 To add a new backend:
 1. Create a class in `src/Backends/` implementing the appropriate interface.
@@ -722,7 +772,8 @@ Each backend is responsible for parsing its configuration from the `.env` file.
 - Refresh from storage: one folder at a time, not its subfolders; a missing file's record can't be forgotten from the UI; jobs belong to the administrator who started them
 - Session idle timeout hardcoded to 1 hour; no absolute lifetime (#16)
 - Password changes aren't logged, and the profile dialog doesn't ask for the current password
-- No forgotten-password reset (#1); the Logs tab of the admin page is empty (#23)
+- No forgotten-password reset (#1)
+- The events database file doesn't shrink after a purge (no `VACUUM`)
 - Login rate-limit counters are per server (APCu)
 
 ## Contributing
