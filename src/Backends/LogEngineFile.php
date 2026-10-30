@@ -2,7 +2,7 @@
 // src/Backends/LogEngineFile.php
 namespace Backends;
 
-class LogEngineFile implements LogEngineInterface {
+class LogEngineFile implements LogDestination {
     private string $filePath;
     private string $format;
 
@@ -11,18 +11,29 @@ class LogEngineFile implements LogEngineInterface {
         $this->format = $format;
     }
 
-    public function log(string $action, array $context = []): void {
-        $entry = LogEntry::build($action, $context);
+    public function name(): string {
+        return 'file';
+    }
 
+    public function write(array $entry): void {
         $line = $this->format === 'csv'
             ? $this->toCsv($entry)
-            : json_encode($entry, JSON_UNESCAPED_SLASHES);
+            : LogEntry::encode($entry);
 
-        file_put_contents($this->filePath, $line . PHP_EOL, FILE_APPEND | LOCK_EX);
+        $written = @file_put_contents($this->filePath, $line . PHP_EOL, FILE_APPEND | LOCK_EX);
+        if ($written !== strlen($line . PHP_EOL)) {
+            throw new \RuntimeException("Cannot write to $this->filePath: " . (error_get_last()['message'] ?? 'short write'));
+        }
     }
 
     private function toCsv(array $data): string {
-        return '"' . implode('","', array_map('addslashes', $data)) . '"';
+        // Nested values as JSON, null as an empty field
+        $fields = array_map(fn($value) => match (true) {
+            $value === null => '',
+            is_scalar($value) => (string)$value,
+            default => LogEntry::encode($value),
+        }, $data);
+        return '"' . implode('","', array_map('addslashes', $fields)) . '"';
     }
 
     public function healthCheck(): bool {

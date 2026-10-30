@@ -664,7 +664,8 @@ The largest file is set by `upload_max_size`, not by these limits.
   |---|---|---|
   | `base_storage_directory` | `/data/files` | `files_dir` if set (a host directory owned by `uid`, 82 by default), otherwise the volume `dfir-fm-files`. Nothing to set with a storage engine that doesn't use local files. |
   | `database_path` | `/data/database/app.sqlite` | always the volume `dfir-fm-database` (back it up) |
-  | `log_file_path` | `/data/logs/dfir-fm.log` | `log_dir` if set (a host directory owned by `uid`, 82 by default), otherwise the volume `dfir-fm-logs`, disposable: `docker volume rm dfir-fm-logs`; never `docker compose down -v`, which also removes the database |
+  | `events_database_path` | `/data/logs/events.sqlite` | `log_dir` if set (a host directory owned by `uid`, 82 by default), otherwise the volume `dfir-fm-logs`. It holds the events (chain of custody): back it up; never `docker compose down -v`, which removes the volumes |
+  | `log_file_path` | `/data/logs/dfir-fm.log` | the same directory as `events_database_path` |
 
   Host directories must exist before the first start: Docker would create a missing one owned by root, which the application can't write to (uploads and downloads then fail with a 500, "The storage is unavailable").
   Sessions live in the container's `/tmp`: a restart logs everyone out.

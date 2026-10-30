@@ -24,6 +24,7 @@ use Core\App;
 use Core\Config;
 use Core\Database;
 use Backends\LogEngineFactory;
+use Backends\LogWriteException;
 use Backends\StorageEngineFactory;
 use Services\ChunkedUpload;
 use Services\RefreshJobs;
@@ -32,6 +33,8 @@ try {
     $config = Config::load(ENV_FILE);
     $db = Database::initialize(Config::databasePath($config, BASE_PATH));
     $logger = LogEngineFactory::create($config);
+    // A failed write ends the script with exit code 1 (D29)
+    LogWriteException::handleInCli();
     App::setConfig($config);
     App::setDb($db);
     App::setLogger($logger);

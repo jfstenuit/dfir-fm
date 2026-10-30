@@ -3,6 +3,7 @@
 namespace Services;
 
 use Backends\LogEngineInterface;
+use Backends\LogWriteException;
 use Backends\StorageEngineInterface;
 use Backends\StorageEngineLocal;
 use Middleware\AccessMiddleware;
@@ -735,6 +736,12 @@ final class ChunkedUpload
             $result = $work();
             $this->db->exec('COMMIT');
             return $result;
+        } catch (LogWriteException $e) {
+            // No logging, no service (D29): the work stops at the event that
+            // couldn't be logged, and what was done (and logged) so far stays
+            // done. A rollback would leave events of changes undone.
+            $this->db->exec('COMMIT');
+            throw $e;
         } catch (\Throwable $e) {
             $this->db->exec('ROLLBACK');
             throw $e;

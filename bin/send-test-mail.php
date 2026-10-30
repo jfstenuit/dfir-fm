@@ -21,6 +21,7 @@ require_once BASE_PATH . '/vendor/autoload.php';
 
 use Core\Config;
 use Backends\LogEngineFactory;
+use Backends\LogWriteException;
 use Backends\MailEngineFactory;
 use PHPMailer\PHPMailer\PHPMailer;
 
@@ -32,6 +33,8 @@ $recipient = $argv[1];
 
 $config = Config::load(ENV_FILE);
 $logger = LogEngineFactory::create($config);
+// A failed write ends the script with exit code 1 (D29)
+LogWriteException::handleInCli();
 $engineName = MailEngineFactory::engineName($config);
 
 if (MailEngineFactory::isManual($config)) {

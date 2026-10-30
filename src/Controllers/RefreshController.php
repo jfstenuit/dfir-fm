@@ -4,6 +4,7 @@ namespace Controllers;
 
 use Core\App;
 use Core\Request;
+use Backends\LogWriteException;
 use Backends\StorageEngineFactory;
 use Middleware\AccessMiddleware;
 use Services\RefreshException;
@@ -74,6 +75,8 @@ class RefreshController
             }
         } catch (RefreshException $e) {
             self::respond($e->httpStatus, ['success' => false, 'code' => $e->errorCode, 'message' => $e->getMessage()] + $e->details);
+        } catch (LogWriteException $e) {
+            throw $e; // the 503 of index.php (D29)
         } catch (\Throwable $e) {
             error_log('Refresh error: ' . $e);
             self::respond(500, ['success' => false, 'code' => 'InternalError', 'message' => 'Internal error.']);

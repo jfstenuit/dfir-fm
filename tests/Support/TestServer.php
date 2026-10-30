@@ -26,6 +26,8 @@ final class TestServer
     public readonly string $url;
     /** The SQLite file the instance uses (database_path) */
     public readonly string $databasePath;
+    /** The events database (events_database_path) */
+    public readonly string $eventsDatabasePath;
     public string $adminPassword = '';
 
     private $process = null;
@@ -59,6 +61,7 @@ final class TestServer
         $lines = array_map(fn($k, $v) => "$k=$v", array_keys($settings), $settings);
         file_put_contents("$this->root/.env", implode("\n", $lines) . "\n");
         $this->databasePath = \Core\Config::databasePath($settings, $this->root);
+        $this->eventsDatabasePath = \Core\Config::eventsDatabasePath($settings, $this->root);
         touch("$this->root/app.log");
 
         if ($withFixtures) {
@@ -212,6 +215,13 @@ final class TestServer
     {
         $lines = file("$this->root/app.log", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
         return array_map(fn($line) => json_decode($line, true), $lines);
+    }
+
+    /** @return list<array> rows of the events database, oldest first */
+    public function events(): array
+    {
+        $pdo = new \PDO("sqlite:$this->eventsDatabasePath", null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        return $pdo->query('SELECT * FROM events ORDER BY id')->fetchAll(\PDO::FETCH_ASSOC);
     }
 
     /** @return list<array> application log entries for one action */

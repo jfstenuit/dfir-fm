@@ -45,6 +45,21 @@ class Config
     }
 
     /**
+     * The events database (D27): events_database_path, or
+     * storage/events/events.sqlite under the application directory, a
+     * directory of its own. A relative path is relative to the application
+     * directory.
+     */
+    public static function eventsDatabasePath(array $config, string $basePath): string
+    {
+        $path = trim($config['events_database_path'] ?? '');
+        if ($path === '') {
+            return $basePath . '/storage/events/events.sqlite';
+        }
+        return str_starts_with($path, '/') ? $path : $basePath . '/' . $path;
+    }
+
+    /**
      * Parse KEY=value lines. Blank lines and lines starting with # are
      * skipped; a value wrapped in matching single or double quotes is
      * unquoted. A # inside a value is kept (passwords may contain one).

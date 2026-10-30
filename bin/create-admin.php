@@ -24,6 +24,7 @@ use Core\App;
 use Core\Config;
 use Core\Database;
 use Backends\LogEngineFactory;
+use Backends\LogWriteException;
 use Middleware\AccessMiddleware;
 
 if ($argc !== 2 || $argv[1] === '' || str_starts_with($argv[1], '-')) {
@@ -39,6 +40,8 @@ if (str_starts_with($username, AccessMiddleware::DELETED_PREFIX)) {
 $config = Config::load(ENV_FILE);
 $db = Database::initialize(Config::databasePath($config, BASE_PATH));
 $logger = LogEngineFactory::create($config);
+// A failed write ends the script with exit code 1 (D29)
+LogWriteException::handleInCli();
 App::setConfig($config);
 App::setDb($db);
 App::setLogger($logger);

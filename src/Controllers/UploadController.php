@@ -4,6 +4,7 @@ namespace Controllers;
 
 use Core\Request;
 use Core\App;
+use Backends\LogWriteException;
 use Backends\StorageEngineFactory;
 use Services\ChunkedUpload;
 use Services\UploadException;
@@ -86,6 +87,8 @@ class UploadController
             }
         } catch (UploadException $e) {
             self::respond($e->httpStatus, ['status' => 'error', 'code' => $e->errorCode, 'message' => $e->getMessage()] + $e->details);
+        } catch (LogWriteException $e) {
+            throw $e; // the 503 of index.php (D29)
         } catch (\Throwable $e) {
             error_log('Upload error: ' . $e);
             self::respond(500, ['status' => 'error', 'code' => 'InternalError', 'message' => 'Internal error.']);

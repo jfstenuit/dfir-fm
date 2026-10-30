@@ -28,9 +28,9 @@ services:
       # The host port is http_port if set, otherwise 8080
       - "127.0.0.1:${http_port:-8080}:8080"
     volumes:
-      # Configuration. In the container, base_storage_directory, database_path
-      # and log_file_path are set by the image (/data/...): the host paths in
-      # the file are ignored.
+      # Configuration. In the container, base_storage_directory, database_path,
+      # events_database_path and log_file_path are set by the image
+      # (/data/...): the host paths in the file are ignored.
       - type: bind
         source: ./.env
         target: /var/www/html/.env
@@ -40,8 +40,9 @@ services:
       # Evidence (storage_engine=local): the host directory files_dir if set,
       # otherwise the volume dfir-fm-files
       - ${files_dir:-dfir-fm-files}:/data/files
-      # Log file (log_engine=file): the host directory log_dir if set,
-      # otherwise the volume dfir-fm-logs, disposable
+      # Events database and log file (log_engine=file): the host directory
+      # log_dir if set, otherwise the volume dfir-fm-logs. It holds the
+      # events (chain of custody): back it up
       - ${log_dir:-dfir-fm-logs}:/data/logs
       # Database: always a volume (back it up)
       - dfir-fm-database:/data/database

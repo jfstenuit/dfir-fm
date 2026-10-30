@@ -2,6 +2,7 @@
 namespace Tests\Unit\Services;
 
 use Backends\LogEngineInterface;
+use Backends\LogWriteException;
 use Backends\StorageEngineLocal;
 use Core\Database;
 use PDO;
@@ -62,6 +63,23 @@ final class ChunkedUploadTest extends TestCase
             public function healthCheck(): bool { return true; }
         };
         return new ChunkedUpload($this->db, $this->storage, $logger, $config, '192.0.2.7');
+    }
+
+    /** A logger that can't write $failing (D29) */
+    private function serviceFailingToLog(string $failing): ChunkedUpload
+    {
+        $logger = new class($this->log, $failing) implements LogEngineInterface {
+            public function __construct(private array &$log, private string $failing) {}
+            public function log(string $action, array $context = []): void
+            {
+                if ($action === $this->failing) {
+                    throw new LogWriteException(['file' => 'disk full']);
+                }
+                $this->log[] = [$action, $context];
+            }
+            public function healthCheck(): bool { return true; }
+        };
+        return new ChunkedUpload($this->db, $this->storage, $logger, [], '192.0.2.7');
     }
 
     /** Send chunks of $bytes as Dropzone would (all of them, or the given indexes) */
@@ -148,6 +166,23 @@ final class ChunkedUploadTest extends TestCase
             // sha256sum < /dev/null
             $this->assertSame('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', $state['file']['sha256']);
         }
+    }
+
+    /** D29: the upload stays concluded when its event can't be logged; nothing is rolled back */
+    public function testUploadConcludedWhenItsEventCannotBeLogged(): void
+    {
+        $service = $this->serviceFailingToLog('upload_completed');
+        $this->send('0123456789', service: $service);
+        try {
+            $service->complete(self::ALICE, self::UUID);
+            $this->fail('no LogWriteException');
+        } catch (LogWriteException) {
+        }
+
+        $this->assertSame('0123456789', file_get_contents("$this->dir/files/dump.bin"));
+        $this->assertSame('completed', $this->upload()['status']);
+        $this->assertSame(1, (int)$this->db->query("SELECT COUNT(*) FROM files WHERE name = 'dump.bin'")->fetchColumn());
+        $this->assertFalse($this->db->inTransaction());
     }
 
     public function testNothingVisibleBeforeCompletion(): void

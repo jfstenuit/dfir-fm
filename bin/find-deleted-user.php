@@ -24,6 +24,7 @@ require_once BASE_PATH . '/vendor/autoload.php';
 
 use Core\Config;
 use Backends\LogEngineFactory;
+use Backends\LogWriteException;
 use Middleware\AccessMiddleware;
 
 if ($argc !== 2 || trim($argv[1]) === '' || str_starts_with($argv[1], '-')) {
@@ -48,6 +49,8 @@ try {
     $stmt->execute([':length' => strlen($prefix), ':prefix' => $prefix]);
     $accounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $logger = LogEngineFactory::create($config);
+    // A failed write ends the script with exit code 1 (D29)
+    LogWriteException::handleInCli();
 } catch (\Throwable $e) {
     fwrite(STDERR, 'Error: ' . $e->getMessage() . "\n");
     exit(2);

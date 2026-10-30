@@ -2,16 +2,20 @@
 // src/Backends/LogEngineSyslog.php
 namespace Backends;
 
-class LogEngineSyslog implements LogEngineInterface {
-    private string $tag;
-
+class LogEngineSyslog implements LogDestination {
     public function __construct(string $tag = 'dfir-fm') {
         openlog($tag, LOG_PID, LOG_USER);
     }
 
-    public function log(string $action, array $context = []): void {
-        $entry = LogEntry::build($action, $context);
-        syslog(LOG_INFO, json_encode($entry, JSON_UNESCAPED_SLASHES));
+    public function name(): string {
+        return 'syslog';
+    }
+
+    /** Only a local failure can be seen: what syslog does with the message next is outside the application */
+    public function write(array $entry): void {
+        if (!syslog(LOG_INFO, LogEntry::encode($entry))) {
+            throw new \RuntimeException('syslog() failed');
+        }
     }
 
     public function __destruct() {

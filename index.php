@@ -27,6 +27,7 @@ use Core\App;
 use Core\Response;
 use Core\Request;
 use Backends\LogEngineFactory;
+use Backends\LogWriteException;
 use Middleware\SecurityMiddleware;
 
 // Load configuration
@@ -46,10 +47,36 @@ try {
 // Initialize database
 $db = Database::initialize(Config::databasePath($config, BASE_PATH));
 
-// Initialize logger
+// Initialize logger: the events database, plus the configured log engine
 $logEngine = LogEngineFactory::create($config);
 if (!$logEngine->healthCheck()) {
     Response::triggerSystemError();
+    return;
+}
+
+// No logging, no service (D29): an event that can't be logged ends the
+// request (the action it records may be done), and the application stays
+// stopped until a probe, at most once per 30 s, writes again
+set_exception_handler(function (\Throwable $e) {
+    if (!headers_sent()) {
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+    }
+    if ($e instanceof LogWriteException) {
+        if (!headers_sent()) {
+            Response::triggerLoggingFailure();
+        }
+        return;
+    }
+    // Anything else as PHP reports an uncaught exception
+    error_log('PHP Fatal error:  Uncaught ' . $e);
+    if (!headers_sent()) {
+        Response::triggerSystemError();
+    }
+});
+if (!$logEngine->resume()) {
+    Response::triggerLoggingFailure();
     return;
 }
 

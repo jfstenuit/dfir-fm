@@ -28,7 +28,8 @@ class StorageEngineFactory {
     /**
      * The application's own files, which must never be served, listed or
      * overwritten as evidence if they were configured inside the storage:
-     * the database and its directory, and the log file.
+     * the database and the events database with their directories, and the
+     * log file.
      *
      * @return list<string> absolute paths; a directory ends with '/'
      */
@@ -37,7 +38,11 @@ class StorageEngineFactory {
         $database = Config::databasePath($config, $basePath);
         $paths = [$database, dirname($database) . '/'];
 
-        // As LogEngineFactory chooses the engine and the file
+        // The events database, written whatever log_engine is (D27)
+        $events = Config::eventsDatabasePath($config, $basePath);
+        array_push($paths, $events, dirname($events) . '/');
+
+        // As LogEngineFactory chooses the engine and the file (none with log_engine=none)
         if (($config['log_engine'] ?? $config['log_dest'] ?? 'file') === 'file') {
             $log = $config['log_file_path'] ?? '/tmp/dfir.log';
             $paths[] = str_starts_with($log, '/') ? $log : $basePath . '/' . $log;

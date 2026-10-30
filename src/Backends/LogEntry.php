@@ -22,5 +22,14 @@ class LogEntry {
 
         return $entry;
     }
+
+    /**
+     * The JSON line every JSON destination writes, and the events
+     * database's record column. Invalid UTF-8 (a file name in another
+     * encoding) is replaced with U+FFFD rather than losing the whole event.
+     */
+    public static function encode(array $entry): string {
+        return json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
+    }
 }
 ?>

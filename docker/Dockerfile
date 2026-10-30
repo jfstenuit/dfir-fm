@@ -42,17 +42,19 @@ RUN composer dump-autoload --no-dev --optimize \
 # start.sh changes www-data's ids and hands the volumes over at start):
 #   /data/files     the evidence (base_storage_directory)
 #   /data/database  the SQLite database (database_path)
-#   /data/logs      the log file (log_file_path, with log_engine=file)
+#   /data/logs      the events database (events_database_path) and the log
+#                   file (log_file_path, with log_engine=file)
 RUN mkdir -p /data/files /data/database /data/logs \
     && chown www-data:www-data /data/files /data/database /data/logs \
     && chmod 750 /data/files /data/database /data/logs
 
-# The three paths, inside the container. DFIRFM_<key> variables override the
+# The paths, inside the container. DFIRFM_<key> variables override the
 # keys of a mounted .env, so the same .env serves a host install and the
 # container: its host paths are ignored here. A .env is optional (these
 # variables are enough to start), and docker-compose.yml can override them.
 ENV DFIRFM_BASE_STORAGE_DIRECTORY=/data/files \
     DFIRFM_DATABASE_PATH=/data/database/app.sqlite \
+    DFIRFM_EVENTS_DATABASE_PATH=/data/logs/events.sqlite \
     DFIRFM_LOG_FILE_PATH=/data/logs/dfir-fm.log
 
 VOLUME ["/data/files", "/data/database", "/data/logs"]
