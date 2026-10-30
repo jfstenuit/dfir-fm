@@ -93,6 +93,70 @@ class EventLog
         return ['events' => $rows, 'next' => $more ? $rows[$limit - 1]['id'] : null];
     }
 
+    public const EXPORT_FORMATS = ['jsonl', 'csv'];
+    private const CSV_HEADER = ['ts', 'action', 'username', 'ip', 'peer_ip', 'record'];
+
+    /**
+     * Export the events matching $filters, oldest first, without loading
+     * them in memory: each line is handed to $write as it is built, and
+     * hashed. Events logged after the export started are left out (the
+     * export's own logs_exported among them).
+     *
+     * JSONL: each record as stored, one per line, as in the log file.
+     * CSV (RFC 4180): ts, action, username, ip, peer_ip and the full record.
+     * The user-supplied values (file names...) are only in the record, a
+     * JSON object that starts with "{", so no cell is read as a formula.
+     *
+     * @param callable(string): bool $write false: stop (the client went away)
+     * @return array{events: int, sha256: string, last_event_id: ?int, complete: bool}
+     */
+    public function export(array $filters, string $format, callable $write): array
+    {
+        if (!in_array($format, self::EXPORT_FORMATS, true)) {
+            throw new \InvalidArgumentException("Invalid format: $format");
+        }
+        $last = $this->events->query('SELECT MAX(id) FROM events')->fetchColumn();
+        $last = $last === null ? null : (int)$last;
+
+        [$where, $params] = $this->where($filters);
+        $where[] = 'id <= :last';
+        $params[':last'] = $last ?? 0;
+        $stmt = $this->events->prepare('SELECT id, ts, action, username, ip, peer_ip, record FROM events WHERE '
+                                       . implode(' AND ', $where) . ' ORDER BY id');
+        $stmt->execute($params);
+
+        $hash = hash_init('sha256');
+        $emit = function (string $line) use ($hash, $write): bool {
+            hash_update($hash, $line);
+            return $write($line);
+        };
+
+        $count = 0;
+        $complete = $format === 'csv' ? $emit(self::csvLine(self::CSV_HEADER)) : true;
+        while ($complete && ($row = $stmt->fetch(PDO::FETCH_ASSOC)) !== false) {
+            $line = $format === 'csv'
+                ? self::csvLine([$row['ts'], $row['action'], $row['username'], $row['ip'], $row['peer_ip'], $row['record']])
+                : $row['record'] . "\n";
+            $complete = $emit($line);
+            $count += $complete ? 1 : 0;
+        }
+        $stmt->closeCursor();
+
+        return ['events' => $count, 'sha256' => hash_final($hash), 'last_event_id' => $last, 'complete' => $complete];
+    }
+
+    /** One CSV line, RFC 4180 (no backslash escape), CRLF */
+    private static function csvLine(array $fields): string
+    {
+        static $buffer = null;
+        $buffer ??= fopen('php://memory', 'w+');
+        ftruncate($buffer, 0);
+        rewind($buffer);
+        fputcsv($buffer, $fields, ',', '"', '', "\r\n");
+        rewind($buffer);
+        return stream_get_contents($buffer);
+    }
+
     /** @return list<string> the actions present, for the filter list */
     public function actions(): array
     {

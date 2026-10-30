@@ -146,6 +146,16 @@ class AdminView
           <div class="col-auto d-flex gap-1">
             <button type="submit" class="btn btn-sm btn-primary text-nowrap" title="Search"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
             <button type="reset" class="btn btn-sm btn-outline-secondary" title="Clear the filters" aria-label="Clear the filters"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            <div class="dropdown">
+              <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle text-nowrap" id="logsExport"
+                      data-bs-toggle="dropdown" aria-expanded="false" title="Download the events of the search shown, oldest first">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+              </button>
+              <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="logsExport">
+                <li><button type="button" class="dropdown-item" data-format="jsonl">JSONL <span class="text-muted small">(as the log file)</span></button></li>
+                <li><button type="button" class="dropdown-item" data-format="csv">CSV</button></li>
+              </ul>
+            </div>
           </div>
         </form>
         <!-- position-relative: keeps the visually-hidden header label inside the scroll box -->

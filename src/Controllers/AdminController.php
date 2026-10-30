@@ -69,6 +69,8 @@ class AdminController
             self::listEvents($config);
         } elseif ($action === "listEventActions") {
             self::listEventActions($config);
+        } elseif ($action === "exportEvents") {
+            self::exportEvents($config);
         } else {
             // Render the admin view
             $users=[]; $groups=[]; $accessRights=[];
@@ -860,6 +862,69 @@ class AdminController
             App::getLogger()->log('logs_viewed', ['filters' => (object)$filters]);
         }
         echo json_encode(['success' => true] + $page);
+    }
+
+    /**
+     * Logs tab: download the events of a search, oldest first (JSONL or
+     * CSV). Sent by a form POST, so the browser streams it to disk. The
+     * SHA-256 of the file is only known at the end: logs_exported carries
+     * it, so an exported file attached to a case can be matched to the log.
+     * A client that goes away doesn't end the script before that is logged
+     * (complete: false).
+     */
+    private static function exportEvents(array $config)
+    {
+        $format = $_POST['format'] ?? '';
+        try {
+            $filters = EventLog::filters($_POST);
+            if (!is_string($format) || !in_array($format, EventLog::EXPORT_FORMATS, true)) {
+                throw new \InvalidArgumentException('Invalid format.');
+            }
+        } catch (\InvalidArgumentException $e) {
+            header('Content-Type: application/json');
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+            return;
+        }
+
+        // 2026-09-02T10:00:00+00:00 → 2026-09-02T100000Z (no ':' in file names)
+        $stamp = fn(?string $ts) => $ts === null ? null : str_replace(':', '', str_replace('+00:00', 'Z', $ts));
+        $name = sprintf('dfir-fm-events_%s_to_%s.%s', $stamp($filters['from'] ?? null) ?? 'start',
+                        $stamp($filters['until'] ?? null) ?? $stamp(gmdate('c')), $format);
+
+        header('Content-Type: ' . ($format === 'csv' ? 'text/csv; charset=UTF-8' : 'application/x-ndjson; charset=UTF-8'));
+        header('Content-Disposition: ' . Response::contentDisposition($name));
+        set_time_limit(0);
+        ignore_user_abort(true);
+        while (ob_get_level() > 0) {
+            ob_end_flush();
+        }
+
+        // Sent by blocks of 64 KiB; the client going away is only seen when a block is sent
+        $buffer = '';
+        $send = function () use (&$buffer): bool {
+            echo $buffer;
+            flush();
+            $buffer = '';
+            return connection_aborted() === 0;
+        };
+        $result = self::eventLog($config)->export($filters, $format, function (string $line) use (&$buffer, $send) {
+            $buffer .= $line;
+            return strlen($buffer) < 65536 || $send();
+        });
+        if ($buffer !== '' && !$send()) {
+            $result['complete'] = false;
+        }
+
+        App::getLogger()->log('logs_exported', [
+            'filters' => (object)$filters,
+            'format' => $format,
+            'file' => $name,
+            'events' => $result['events'],
+            'sha256' => $result['sha256'],
+            'last_event_id' => $result['last_event_id'],
+            'complete' => $result['complete'],
+        ]);
     }
 
     private static function listEventActions(array $config)
