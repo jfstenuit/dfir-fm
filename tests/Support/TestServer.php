@@ -167,6 +167,31 @@ final class TestServer
                    SELECT id, 1, 1, 1, 1 FROM groups WHERE name = 'writers'");
     }
 
+    /** Register a directory under '/' or another registered one; returns its id */
+    public function addDirectory(string $path, int $createdBy = 1, ?string $createdFrom = null): int
+    {
+        $db = $this->db();
+        $parent = $db->prepare('SELECT id FROM directories WHERE path = :p');
+        $parent->execute([':p' => dirname($path)]);
+        $db->prepare("INSERT INTO directories (name, path, parent_id, created_by, created_from) VALUES (:n, :p, :parent, :by, :from)")
+           ->execute([':n' => basename($path), ':p' => $path, ':parent' => $parent->fetchColumn(), ':by' => $createdBy, ':from' => $createdFrom]);
+        return (int)$db->lastInsertId();
+    }
+
+    /** Give a user rights on a directory through a group of their own for it */
+    public function grantAccess(string $username, string $path, bool $view = false, bool $write = false, bool $upload = true): void
+    {
+        $db = $this->db();
+        $group = "access $username $path";
+        $db->prepare("INSERT OR IGNORE INTO groups (name) VALUES (:g)")->execute([':g' => $group]);
+        $db->prepare("INSERT OR IGNORE INTO user_group (user_id, group_id)
+                      SELECT u.id, g.id FROM users u, groups g WHERE u.username = :u AND g.name = :g")
+           ->execute([':u' => $username, ':g' => $group]);
+        $db->prepare("INSERT OR REPLACE INTO access_rights (group_id, directory_id, can_view, can_write, can_upload)
+                      SELECT g.id, d.id, :v, :w, :up FROM groups g, directories d WHERE g.name = :g AND d.path = :p")
+           ->execute([':g' => $group, ':p' => $path, ':v' => (int)$view, ':w' => (int)$write, ':up' => (int)$upload]);
+    }
+
     /** Admin status of a user, read straight from the test instance's database */
     public function isAdmin(string $username): bool
     {

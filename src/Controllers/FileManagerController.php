@@ -51,6 +51,13 @@ class FileManagerController
             return;
         }
 
+        // A directory the user may not know about answers like a missing one (#24)
+        if (!AccessMiddleware::canSeeDirectory($db, $userId, $directoryInfo['path'])) {
+            App::getLogger()->log('filemanager_failure', ['cause'=>'Tried to access directory without rights','directory'=>$currentPath]);
+            Response::triggerNotFound();
+            return;
+        }
+
         // Access rights for the directory and directory items are
         // handled in getDirectoryItems
         $items = AccessMiddleware::getDirectoryItems($db, $userId, $directoryInfo);
@@ -79,17 +86,15 @@ class FileManagerController
         }
 
 
+        // A missing item and one without rights get the same answer:
+        // ids must not reveal what exists (#24)
         if ($itemType === 'd') {
             $directoryInfo = AccessMiddleware::getDirectoryInfo($db,$itemId);
-            if (!$directoryInfo) {
-                echo json_encode(['success' => false, 'message' => 'Directory not found or access denied']);
-                return;
-            }
 
             // Check user access to parent directory
-            $accessRights = AccessMiddleware::checkAccess($db, $directoryInfo['parent_path'], $userId);
-            if (!$accessRights['can_write']) {
-                echo json_encode(['success' => false, 'message' => 'Access denied to directory']);
+            $accessRights = $directoryInfo ? AccessMiddleware::checkAccess($db, $directoryInfo['parent_path'], $userId) : null;
+            if (!$directoryInfo || !$accessRights['can_write']) {
+                echo json_encode(['success' => false, 'message' => 'Directory not found or access denied']);
                 return;
             }
 
@@ -122,15 +127,11 @@ class FileManagerController
             echo json_encode(['success' => true, 'message' => 'Directory deleted successfully']);
         } elseif ($itemType === 'f') {
             $fileInfo = AccessMiddleware::getFileInfo($db,$itemId);
-            if (!$fileInfo) {
-                echo json_encode(['success' => false, 'message' => 'File not found or access denied']);
-                return;
-            }
 
             // Check user access to parent directory
-            $accessRights = AccessMiddleware::checkAccess($db, $fileInfo['directory_path'], $userId);
-            if (!$accessRights['can_write']) {
-                echo json_encode(['success' => false, 'message' => 'Access denied to parent directory']);
+            $accessRights = $fileInfo ? AccessMiddleware::checkAccess($db, $fileInfo['directory_path'], $userId) : null;
+            if (!$fileInfo || !$accessRights['can_write']) {
+                echo json_encode(['success' => false, 'message' => 'File not found or access denied']);
                 return;
             }
 
@@ -173,6 +174,14 @@ class FileManagerController
             return;
         }
 
+        // Check user access to cwd, before anything that tells
+        // which names exist there (#24)
+        $accessRights = AccessMiddleware::checkAccess($db, $cwd, $userId);
+        if (!$accessRights['can_write']) {
+            echo json_encode(['success' => false, 'message' => 'Access denied to directory']);
+            return;
+        }
+
         // Construct new Dir Path (cwd + folder name)
         $newDirPath = (rtrim($cwd, '/') === '' ? '' : rtrim($cwd, '/')) . '/' . ltrim($folderName, '/');
 
@@ -188,13 +197,6 @@ class FileManagerController
         if (!NameRules::validFolderName($folderName)) {
             error_log("Invalid directory name: $folderName");
             echo json_encode(['success' => false, 'message' => 'Invalid directory name']);
-            return;
-        }
-
-        // Check user access to cwd
-        $accessRights = AccessMiddleware::checkAccess($db, $cwd, $userId);
-        if (!$accessRights['can_write']) {
-            echo json_encode(['success' => false, 'message' => 'Access denied to directory']);
             return;
         }
 

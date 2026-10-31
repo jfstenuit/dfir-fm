@@ -60,6 +60,45 @@ final class FileListingTest extends FeatureTestCase
         }
     }
 
+    /** Who created a folder, and from where, only for its readers (#25) */
+    public function testFolderCreatorHiddenFromContributors(): void
+    {
+        $this->server->addDirectory('/case-a', 1, '203.0.113.7');
+        $this->server->grantAccess(TestServer::BOB, '/case-a');
+
+        $body = $this->bobClient()->get('')->body;
+        $this->assertStringContainsString('case-a', $body);
+        $this->assertStringNotContainsString(TestServer::ADMIN, $body);
+        $this->assertStringNotContainsString('203.0.113.7', $body);
+
+        $this->server->grantAccess(TestServer::BOB, '/case-a', view: true);
+        $body = $this->bobClient()->get('')->body;
+        $this->assertStringContainsString(TestServer::ADMIN, $body);
+        $this->assertStringContainsString('203.0.113.7', $body);
+    }
+
+    /** A contributor sees their own uploads with their address, nobody else's; a reader sees all */
+    public function testContributorSeesOnlyOwnUploads(): void
+    {
+        $dir = $this->server->addDirectory('/case-a');
+        $bobId = $this->server->db()->query("SELECT id FROM users WHERE username = '" . TestServer::BOB . "'")->fetchColumn();
+        $insert = $this->server->db()->prepare("INSERT INTO files (directory_id, name, uploaded_by, uploaded_from) VALUES (:d, :n, :by, :from)");
+        $insert->execute([':d' => $dir, ':n' => 'mine.bin', ':by' => $bobId, ':from' => '198.51.100.1']);
+        $insert->execute([':d' => $dir, ':n' => 'theirs.bin', ':by' => 1, ':from' => '203.0.113.7']);
+        $this->server->grantAccess(TestServer::BOB, '/case-a');
+
+        $body = $this->bobClient()->get('', ['query' => ['p' => '/case-a']])->body;
+        $this->assertStringContainsString('mine.bin', $body);
+        $this->assertStringContainsString('198.51.100.1', $body);
+        $this->assertStringNotContainsString('theirs.bin', $body);
+        $this->assertStringNotContainsString('203.0.113.7', $body);
+
+        $this->server->grantAccess(TestServer::BOB, '/case-a', view: true);
+        $body = $this->bobClient()->get('', ['query' => ['p' => '/case-a']])->body;
+        $this->assertStringContainsString('theirs.bin', $body);
+        $this->assertStringContainsString('203.0.113.7', $body);
+    }
+
     /** Upload names may contain <, > and &: they were printed raw (stored HTML injection) */
     public function testNamesAreEscaped(): void
     {
