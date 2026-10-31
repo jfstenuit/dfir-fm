@@ -92,6 +92,23 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
    ```
    The application is then available at `http://127.0.0.1:8080/` (or the port set by `http_port` in the "Docker" section). Serve it to others through a TLS-terminating reverse proxy. See `DEVELOPER.md`, "Docker".
 
+### Air-gapped deployments
+Once installed, DFIR FM needs no Internet access: Bootstrap, its icons and Dropzone are served by the application itself from `vendor/`, never from a CDN (the Content-Security-Policy only allows the application's own origin), and the application makes no outbound connections except to send mail. Use `mail_engine=none` (invitation links are shown to the administrator), or `mail`/`smtp` with a relay on the isolated network; `sendgrid` needs the Internet.
+
+Installing it is another matter: `composer install` downloads the dependencies, the front-end libraries included (`vendor/` is not in the repository), and building the Docker image downloads the base images, Alpine packages, APCu and the dependencies. Prepare the installation on a connected machine and carry it over:
+
+- **Docker:** build the image on the connected machine, from a checkout of the same version, and export it:
+  ```bash
+  cd docker
+  docker compose build
+  docker compose config --images   # the image's name, e.g. docker-app
+  docker save docker-app | gzip > dfir-fm-image.tar.gz
+  ```
+  On the air-gapped host, with the same checkout: `docker load < dfir-fm-image.tar.gz`, then `docker compose up -d` from `docker/`, **without** `--build`, which would try to rebuild it.
+- **Without Docker:** run `composer install --no-dev` on a connected machine with PHP 8.4, then copy the whole directory, `vendor/` included, to the air-gapped host and continue with step 3. The host still needs PHP and its extensions, from its own package mirror.
+
+Until the first release, the image has to be built this way. From then on, ready-made Docker images will be provided with each release, and only developers will need the build step: an air-gapped installation will then be a `docker save` of the published image (or a download of its archive) and a `docker load`.
+
 ---
 
 ## Usage
