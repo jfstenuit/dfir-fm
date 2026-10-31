@@ -707,7 +707,11 @@ The largest file is set by `upload_max_size`, not by these limits.
 
 ## Docker
 
-`docker/docker-compose.yml` builds the image from the repository root (`.dockerignore` keeps `.env`, `storage/`, `vendor/` and `.git` out of the build context) and runs one container:
+`docker/docker-compose.yml` runs one container from the released image, `ghcr.io/jfstenuit/dfir-fm:${image_tag:-<release>}`. From a checkout, `docker compose up -d --build` builds that image from the repository root instead, under the same name (`.dockerignore` keeps `.env`, `storage/`, `vendor/` and `.git` out of the build context); the next `docker compose pull` brings back the released one.
+
+**Releases.** `gh release create vX.Y.Z --generate-notes` (or "Draft a new release" on GitHub) publishes the release and its tag; `.github/workflows/release.yml` then runs the CI workflow, builds the image for `linux/amd64` and `linux/arm64`, pushes it to GHCR with the tags `X.Y.Z`, `X.Y`, `X` and `latest` (a prerelease, `vX.Y.Z-rc1`, gets its own tag only), and attaches to the release the install bundle `dfir-fm-docker.tar.gz` (README, LICENSE, `env.sample`, and `docker/docker-compose.yml` with this release as the default `image_tag` and without its `build` section) and the `amd64` image as `dfir-fm-image-X.Y.Z-amd64.tar.gz`. Before tagging, set the default of `image_tag` in `docker/docker-compose.yml` to the new version, so that `main` follows the latest release (the bundle gets the right one either way). GHCR creates the package private: after the first release, make it public (the repository's Packages → dfir-fm → Package settings → Change visibility), or `docker compose pull` asks for a login.
+
+The container:
 
 - **Processes:** PHP-FPM (listening on 127.0.0.1:9000 only) and lighttpd on port **8080**, both started in the foreground by `docker/start.sh`. When either exits, the script stops the other and exits, so the container stops and its restart policy applies. The image's stop signal is `SIGTERM` (the PHP base image's `SIGQUIT` is ignored by bash as PID 1, which made `docker compose stop` wait 10 s for a SIGKILL).
 - **Routing:** `docker/lighttpd.conf` mirrors `.htaccess`: the same static allowlist, 404 for `storage/`, `src/`, `bin/`, `docker/`, `tests/`, dotfiles and the rest of `assets/` and `vendor/`, everything else to `index.php`. lighttpd has no default MIME types: the file lists one per served extension, including `.mjs` (browsers refuse a module script with another type).

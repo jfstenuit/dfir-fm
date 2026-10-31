@@ -1,15 +1,22 @@
-# DFIR FM. From this directory: docker compose up -d --build
+# DFIR FM. From this directory: docker compose pull && docker compose up -d
 # Then create the first administrator (prints a random password once):
 #   docker compose exec -u www-data app php bin/create-admin.php you@yourdomain.com
 #
 # Configuration: docker/.env, to create before the first start: copy the
 # project's env.sample there and uncomment its Docker settings. Compose reads
-# it (files_dir, log_dir, http_port, uid, gid) and the container gets it as
-# the application's .env. It must be readable by the container's www-data user
-# (uid/gid 82, or uid and gid if set).
-# See DEVELOPER.md, "Docker".
+# it (image_tag, files_dir, log_dir, http_port, uid, gid) and the container
+# gets it as the application's .env. It must be readable by the container's
+# www-data user (uid/gid 82, or uid and gid if set). Change settings there,
+# not in this file, which an upgrade replaces.
+# See README.md, "Installation", and
+# https://github.com/jfstenuit/dfir-fm/blob/main/DEVELOPER.md#docker
 services:
   app:
+    # The released image: this file's release, or image_tag if set (e.g. 1,
+    # the latest 1.x release). From a checkout, "docker compose up -d --build"
+    # builds it from the code instead, under the same name. The install bundle
+    # of a release has no build section.
+    image: ghcr.io/jfstenuit/dfir-fm:${image_tag:-1.0.0}
     build:
       context: ..
       dockerfile: docker/Dockerfile

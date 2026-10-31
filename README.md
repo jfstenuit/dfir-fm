@@ -16,24 +16,74 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
 - **Dynamic Contributors:** Invite contributors into a case folder: they join the folder's own group with upload-only access by default, set their password from a single-use link, and only see their own uploads unless granted more.
 - **Flexible Mail Integration:** Send invitations via the local sendmail, SMTP, or SendGrid; on air-gapped hosts (`mail_engine=none`), the invitation link is shown to the administrator instead, to be passed on through another channel.
 - **Forensic-Proof Evidence Handling:** Built with the principles of chain-of-custody and forensic soundness in mind.
-- **Docker Support:** Deploy DFIR FM with Docker Compose for ease of setup.
+- **Ready-Made Docker Images:** Each release publishes an image on the GitHub Container Registry: installing takes Docker Compose, a configuration file and three commands.
 
 ---
 
 ## Getting Started
 
+DFIR FM is installed with Docker: each release publishes a ready-made image, `ghcr.io/jfstenuit/dfir-fm`, for `amd64` and `arm64`, so the host needs neither PHP nor the source code. [Installing without Docker](#installation-without-docker) is for developers and for hosts that can't run Docker.
+
 ### Prerequisites
-- **Server Requirements:**
-  - PHP 8.4 with the `pdo_sqlite`, `apcu`, `curl`, `gmp` and `mbstring` extensions
-  - APCu enabled for the web server (`apc.enabled=1`, the default): it holds the login rate-limit counters. Without it every page answers `503` with what is missing; the `bin/` scripts don't need it.
-  - Composer
-  - Apache with `mod_rewrite` and `AllowOverride` for the application's `.htaccess` (`mod_headers` recommended). Other web servers need its rules translated.
-- **Client Requirements:**
-  - Modern web browser with JavaScript enabled
-- **Or:** Docker with Docker Compose, which needs none of the above (step 4)
+- **Server:** Docker Engine with the Compose plugin (`docker compose`), and a TLS-terminating reverse proxy (nginx, Apache, Caddy, Cloudflare Tunnel…) to serve the application to others: the container speaks plain HTTP on the host's loopback interface.
+- **Client:** a modern web browser with JavaScript enabled.
 
 ### Installation
-1. Clone the repository:
+1. Download and unpack the install bundle of the latest release, in the directory that will hold the installation (e.g. `/opt`):
+   ```bash
+   curl -LO https://github.com/jfstenuit/dfir-fm/releases/latest/download/dfir-fm-docker.tar.gz
+   tar xzf dfir-fm-docker.tar.gz
+   cd dfir-fm/docker
+   ```
+   The bundle holds this README, the license, the configuration template `env.sample` and `docker/docker-compose.yml`, which runs the release's image. The code is in the image.
+
+2. Create the configuration, `docker/.env`, from the template:
+   ```bash
+   cp ../env.sample .env
+   chmod 640 .env
+   sudo chgrp 82 .env     # the container's web server user; with uid/gid set (below), that group
+   ```
+   Edit it: mail (`mail_engine`, or `none` on a host that can't send mail), `trusted_proxies` and `force_https` for the reverse proxy, then uncomment what you need in its "Docker" section at the end:
+   - **Where the data goes.** The storage, database and log paths of the file are ignored: the container keeps them under `/data`. `files_dir` (the evidence) and `log_dir` (the events database and the log file) mount host directories there; left empty, Docker volumes. The database is always in a volume (`dfir-fm-database`). Host directories must exist before the first start.
+   - **Who owns it.** The container's web server user is uid/gid 82. Set `uid` and `gid` to the owner of the host directories (`id -u`, `id -g`) to mount them as they are, with no `chown`.
+   - **Port.** `http_port`, published on `127.0.0.1` (default 8080), for the reverse proxy.
+   - **Version.** `image_tag`: by default the release of the bundle; `1` follows the latest 1.x release.
+
+   **Logs:** every event is stored in the events database, in `log_dir` (or its volume), which the admin page's Logs tab reads. `log_engine` adds a copy: a log file next to it (`file`, the default), the container output (`stderr`), or nothing (`none`). Back up the events database like the application database: it is the audit trail. Never run `docker compose down -v`, which deletes the volumes.
+
+3. Start the application:
+   ```bash
+   docker compose pull
+   docker compose up -d
+   ```
+
+4. Check that invitation e-mails can be sent, and create the first administrator (prints a random password once):
+   ```bash
+   docker compose exec -u www-data app php bin/send-test-mail.php you@yourdomain.com
+   docker compose exec -u www-data app php bin/create-admin.php you@yourdomain.com
+   ```
+
+5. The application answers at `http://127.0.0.1:8080/` (or `http_port`). Point the reverse proxy at it and allow request bodies of a few MiB (uploads arrive in 2 MiB chunks; nginx's default `client_max_body_size` of 1m is too small). For Cloudflare Tunnel and the details of the container, see [DEVELOPER.md, "Docker"](https://github.com/jfstenuit/dfir-fm/blob/main/DEVELOPER.md#docker).
+
+Optionally, run `docker compose exec -u www-data app php bin/check-integrity.php` from time to time (e.g. from cron) to re-hash the stored files against the database.
+
+### Upgrading
+Back up the database volume and the logs (`log_dir` or the `dfir-fm-logs` volume), then unpack the new release's bundle over the old one, from the same directory as in step 1: it replaces the README, `env.sample` and `docker-compose.yml`, and keeps `docker/.env`. Read the release notes, compare `env.sample` with your `.env` for new settings, then:
+```bash
+cd dfir-fm/docker
+docker compose pull
+docker compose up -d
+```
+The new container logs everyone out. Settings belong in `docker/.env`, not in `docker-compose.yml`, which the upgrade replaces (or in a `docker-compose.override.yml` next to it, which Compose reads too). With `image_tag` set to a major version (`1`), `docker compose pull && docker compose up -d` alone follows that line's releases.
+
+### Installation without Docker
+For developers, and for hosts without Docker. The host then needs:
+- PHP 8.4 with the `pdo_sqlite`, `apcu`, `curl`, `gmp` and `mbstring` extensions
+- APCu enabled for the web server (`apc.enabled=1`, the default): it holds the login rate-limit counters. Without it every page answers `503` with what is missing; the `bin/` scripts don't need it.
+- Composer
+- Apache with `mod_rewrite` and `AllowOverride` for the application's `.htaccess` (`mod_headers` recommended). Other web servers need its rules translated.
+
+1. Clone the repository (a release: `git checkout v1.0.0`; `main` is the development version):
    ```bash
    git clone https://github.com/jfstenuit/dfir-fm.git
    cd dfir-fm
@@ -83,32 +133,24 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
      ```
      CSV logs (`log_format=csv`) can't be read back; keep them as they are.
 
-4. (Optional) Run the application with Docker Compose instead (no `composer install` needed on the host). Its configuration is `docker/.env`: copy `env.sample` there, customize it as in step 3 and uncomment its "Docker" section. The paths of the file (files, databases, log) are ignored: the container keeps them under `/data`, and the "Docker" section chooses what is mounted there: `files_dir` and `log_dir`, host directories; left empty, Docker volumes. The database is always in a volume. The events database is in `log_dir` (or its volume), with the log file: back it up, it is the audit trail. `log_engine=none` keeps the events database only; `log_engine=stderr` also sends the events to the container output. The container's web server user is uid/gid 82, or `uid` and `gid` if set: set them to the owner of the host directories to mount them as they are.
-   ```bash
-   cp env.sample docker/.env      # then edit it
-   chmod 640 docker/.env           # with uid/gid unset: sudo chgrp 82 docker/.env, and directories owned by 82
-   cd docker
-   docker compose up -d --build
-   docker compose exec -u www-data app php bin/create-admin.php you@yourdomain.com
-   ```
-   The application is then available at `http://127.0.0.1:8080/` (or the port set by `http_port` in the "Docker" section). Serve it to others through a TLS-terminating reverse proxy. See `DEVELOPER.md`, "Docker".
+4. (Developers) To run a checkout in Docker, configure `docker/.env` as in [Installation](#installation), then build the image from the code with `docker compose up -d --build` in `docker/`. It replaces the released image of the same name on that host. See [DEVELOPER.md, "Docker"](https://github.com/jfstenuit/dfir-fm/blob/main/DEVELOPER.md#docker).
 
 ### Air-gapped deployments
-Once installed, DFIR FM needs no Internet access: Bootstrap, its icons and Dropzone are served by the application itself from `vendor/`, never from a CDN (the Content-Security-Policy only allows the application's own origin), and the application makes no outbound connections except to send mail. Use `mail_engine=none` (invitation links are shown to the administrator), or `mail`/`smtp` with a relay on the isolated network; `sendgrid` needs the Internet.
+Once installed, DFIR FM needs no Internet access: Bootstrap, its icons and Dropzone are served by the application itself, never from a CDN (the Content-Security-Policy only allows the application's own origin), and the application makes no outbound connections except to send mail. Use `mail_engine=none` (invitation links are shown to the administrator), or `mail`/`smtp` with a relay on the isolated network; `sendgrid` needs the Internet.
 
-Installing it is another matter: `composer install` downloads the dependencies, the front-end libraries included (`vendor/` is not in the repository), and building the Docker image downloads the base images, Alpine packages, APCu and the dependencies. Prepare the installation on a connected machine and carry it over:
+Installing it is another matter: `docker compose pull` downloads the image, and `composer install` downloads the dependencies. Fetch what's needed on a connected machine and carry it over:
 
-- **Docker:** build the image on the connected machine, from a checkout of the same version, and export it:
+- **Docker:** each release has, next to the install bundle, the image as an archive for `amd64` hosts, `dfir-fm-image-<version>-amd64.tar.gz`. Download both from the [release page](https://github.com/jfstenuit/dfir-fm/releases), or make the archive yourself (any platform):
   ```bash
-  cd docker
-  docker compose build
-  docker compose config --images   # the image's name, e.g. docker-app
-  docker save docker-app | gzip > dfir-fm-image.tar.gz
+  docker pull --platform linux/arm64 ghcr.io/jfstenuit/dfir-fm:1.0.0
+  docker save ghcr.io/jfstenuit/dfir-fm:1.0.0 | gzip > dfir-fm-image-1.0.0-arm64.tar.gz
   ```
-  On the air-gapped host, with the same checkout: `docker load < dfir-fm-image.tar.gz`, then `docker compose up -d` from `docker/`, **without** `--build`, which would try to rebuild it.
-- **Without Docker:** run `composer install --no-dev` on a connected machine with PHP 8.4, then copy the whole directory, `vendor/` included, to the air-gapped host and continue with step 3. The host still needs PHP and its extensions, from its own package mirror.
-
-Until the first release, the image has to be built this way. From then on, ready-made Docker images will be provided with each release, and only developers will need the build step: an air-gapped installation will then be a `docker save` of the published image (or a download of its archive) and a `docker load`.
+  On the air-gapped host, unpack the bundle and configure it as in [Installation](#installation), then load the image and start, **without** `docker compose pull`:
+  ```bash
+  docker load < dfir-fm-image-1.0.0-amd64.tar.gz
+  docker compose up -d
+  ```
+- **Without Docker:** run `composer install --no-dev` on a connected machine with PHP 8.4, then copy the whole directory, `vendor/` included, to the air-gapped host and continue with step 3 of [Installation without Docker](#installation-without-docker). The host still needs PHP and its extensions, from its own package mirror.
 
 ---
 
