@@ -27,10 +27,28 @@ class SecurityMiddleware
         ];
     }
 
+    /**
+     * Why APCu can't hold the rate-limit counters, or null when it can
+     * (#14). With apc.enabled=0 (apc.enable_cli=0 in the CLI) the extension
+     * is loaded but every apcu_* call fails silently: throttle() would
+     * never count an attempt.
+     */
+    public static function apcuProblem(): ?string
+    {
+        if (!extension_loaded('apcu')) {
+            return 'the APCu extension is not loaded. Install it (Debian/Ubuntu: php-apcu; otherwise pecl install apcu) and restart PHP.';
+        }
+        if (!apcu_enabled()) {
+            return 'the APCu extension is loaded but disabled. Set apc.enabled=1 in php.ini and restart PHP.';
+        }
+        return null;
+    }
+
     public static function throttle(string $key, int $maxAttempts = 5, int $ttl = 300): bool
     {
-        if (!function_exists('apcu_fetch')) {
-            throw new \Exception("APCu extension is required for rate limiting.");
+        // index.php refuses to run without APCu; this guards other callers
+        if (($problem = self::apcuProblem()) !== null) {
+            throw new \RuntimeException("APCu is required for rate limiting: $problem");
         }
 
         $attempts = apcu_fetch($key) ?: 0;

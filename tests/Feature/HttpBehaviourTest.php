@@ -2,6 +2,7 @@
 namespace Tests\Feature;
 
 use Tests\Support\FeatureTestCase;
+use Tests\Support\TestServer;
 
 /**
  * Security headers, routing of unknown paths, configuration errors.
@@ -85,6 +86,27 @@ final class HttpBehaviourTest extends FeatureTestCase
         $this->restartWith(['force_https' => 'maybe']);
         $this->assertSame(500, $this->client()->get('login')->status);
         $this->assertStringContainsString("Invalid force_https value: 'maybe'", $this->server->serverLog());
+    }
+
+    /** apc.enabled=0: the extension is loaded, but rate limiting would silently do nothing (#14) */
+    public function testDisabledApcuStopsTheApplication(): void
+    {
+        $this->restartWith([], true, ['apc.enabled' => '0']);
+        $client = $this->client();
+
+        $page = $client->get('login');
+        $this->assertSame(503, $page->status);
+        $this->assertStringContainsString('apc.enabled=1', $page->body);
+        $this->assertSecurityHeaders($page, '503 page');
+
+        $json = $client->post('login', ['username' => TestServer::BOB, 'password' => TestServer::BOB_PASSWORD]);
+        $this->assertSame(503, $json->status);
+        $this->assertSame('apcu_unavailable', $json->json()['code'] ?? null);
+
+        $log = $this->server->serverLog();
+        $this->assertStringContainsString('DFIR FM configuration error: APCu unavailable', $log);
+        $this->assertStringNotContainsString('Uncaught', $log);
+        $this->assertSame([], $this->server->logEntries('login_password_success'), 'nothing got through');
     }
 
     public function testUnreadableEnvStopsTheApplication(): void

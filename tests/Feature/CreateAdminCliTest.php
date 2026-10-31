@@ -33,6 +33,15 @@ final class CreateAdminCliTest extends FeatureTestCase
         $this->assertSame(200, $bob->get('admin')->status);
     }
 
+    /** In the CLI, APCu is usually off (apc.enable_cli=0): create-admin doesn't need it (#14) */
+    public function testRunsWithoutApcu(): void
+    {
+        $this->server->ini = ['apc.enable_cli' => '0'];
+        $result = $this->server->runCreateAdmin(TestServer::BOB);
+        $this->assertSame(0, $result['exit'], $result['stderr']);
+        $this->assertStringContainsString('Updated existing', $result['stdout']);
+    }
+
     public function testRefusesToRunOverHttp(): void
     {
         // bin/ isn't routed by the application; requesting it ends in index.php

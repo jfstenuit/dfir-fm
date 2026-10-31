@@ -25,6 +25,7 @@ Whether managing large datasets, controlling access to sensitive evidence, or en
 ### Prerequisites
 - **Server Requirements:**
   - PHP 8.4 with the `pdo_sqlite`, `apcu`, `curl`, `gmp` and `mbstring` extensions
+  - APCu enabled for the web server (`apc.enabled=1`, the default): it holds the login rate-limit counters. Without it every page answers `503` with what is missing; the `bin/` scripts don't need it.
   - Composer
   - Apache with `mod_rewrite` and `AllowOverride` for the application's `.htaccess` (`mod_headers` recommended). Other web servers need its rules translated.
 - **Client Requirements:**

@@ -25,7 +25,7 @@ class LogHalt {
         $this->probeKey = "log_halt_probe:$id";
     }
 
-    /** Without APCu (#14) the halt can't outlast the request whose write failed */
+    /** Without APCu (the CLI scripts) the halt can't outlast the run whose write failed */
     private static function available(): bool {
         return function_exists('apcu_enabled') && apcu_enabled();
     }

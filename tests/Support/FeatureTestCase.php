@@ -49,10 +49,15 @@ abstract class FeatureTestCase extends TestCase
         return $client;
     }
 
-    /** Restart with a different configuration, e.g. for config-error tests */
-    protected function restartWith(array $env, bool $withFixtures = true): void
+    /**
+     * Restart with a different configuration, e.g. for config-error tests
+     * @param array<string,string> $ini php.ini settings for the server (not the fixtures)
+     */
+    protected function restartWith(array $env, bool $withFixtures = true, array $ini = []): void
     {
         $this->server->stop();
-        $this->server = (new TestServer($env, $withFixtures))->start();
+        $this->server = new TestServer($env, $withFixtures);
+        $this->server->ini = $ini;
+        $this->server->start();
     }
 }

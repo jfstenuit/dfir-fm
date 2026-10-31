@@ -44,6 +44,14 @@ try {
     return;
 }
 
+// Login rate limiting needs APCu: without it (or with apc.enabled=0, where
+// every apcu_* call silently fails) the limits would quietly switch off (#14)
+if (($apcuProblem = SecurityMiddleware::apcuProblem()) !== null) {
+    error_log("DFIR FM configuration error: APCu unavailable, $apcuProblem");
+    Response::triggerApcuUnavailable($apcuProblem);
+    return;
+}
+
 // Initialize database
 $db = Database::initialize(Config::databasePath($config, BASE_PATH));
 

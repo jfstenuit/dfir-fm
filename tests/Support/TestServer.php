@@ -29,6 +29,8 @@ final class TestServer
     /** The events database (events_database_path) */
     public readonly string $eventsDatabasePath;
     public string $adminPassword = '';
+    /** Extra php.ini settings for the server and the CLI scripts, over phpOptions()' */
+    public array $ini = [];
 
     private $process = null;
     private int $port;
@@ -96,7 +98,11 @@ final class TestServer
     {
         $sendmail = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/fake-sendmail.php')
             . ' ' . escapeshellarg("$this->root/sendmail");
-        return ['-d', 'apc.enable_cli=1', '-d', "sendmail_path=$sendmail"];
+        $options = ['-d', 'apc.enable_cli=1', '-d', "sendmail_path=$sendmail"];
+        foreach ($this->ini as $name => $value) {
+            array_push($options, '-d', "$name=$value");
+        }
+        return $options;
     }
 
     /** Wait until something listens on a local port; on timeout, clean up and fail */

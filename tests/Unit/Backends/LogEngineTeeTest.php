@@ -11,7 +11,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * The logger (D27) and the halt (D29). APCu is enabled for the CLI by
- * `composer test` (apc.enable_cli=1); each test uses its own halt scope.
+ * `composer test` (apc.enable_cli=1, required by tests/bootstrap.php);
+ * each test uses its own halt scope.
  */
 final class LogEngineTeeTest extends TestCase
 {

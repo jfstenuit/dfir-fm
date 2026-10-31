@@ -51,12 +51,23 @@ class Response
      */
     public static function triggerLoggingFailure()
     {
-        http_response_code(503);
         header('Retry-After: 30');
-        $message = 'The application is stopped: an event could not be logged. It resumes on its own once logging works again; the operator must fix the log destination (see the web server error log).';
+        self::triggerUnavailable('logging_failed', 'The application is stopped: an event could not be logged. It resumes on its own once logging works again; the operator must fix the log destination (see the web server error log).');
+    }
+
+    /** APCu is missing or disabled (#14): the application refuses to run */
+    public static function triggerApcuUnavailable(string $problem)
+    {
+        self::triggerUnavailable('apcu_unavailable', "The application can't run: it needs APCu for login rate limiting, and $problem");
+    }
+
+    /** 503: JSON for API calls (POST), a page otherwise */
+    private static function triggerUnavailable(string $code, string $message)
+    {
+        http_response_code(503);
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             header('Content-Type: application/json');
-            echo json_encode(['success' => false, 'code' => 'logging_failed', 'message' => $message]);
+            echo json_encode(['success' => false, 'code' => $code, 'message' => $message]);
             return;
         }
         echo "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">

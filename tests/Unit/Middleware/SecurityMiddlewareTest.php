@@ -25,9 +25,6 @@ final class SecurityMiddlewareTest extends TestCase
 
     public function testThrottle(): void
     {
-        if (!function_exists('apcu_enabled') || !apcu_enabled()) {
-            $this->markTestSkipped('APCu not enabled for the CLI (run through `composer test`)');
-        }
         $key = 'test_' . bin2hex(random_bytes(6));
 
         for ($i = 0; $i < 3; $i++) {
@@ -38,5 +35,11 @@ final class SecurityMiddlewareTest extends TestCase
         SecurityMiddleware::clearThrottle($key);
         $this->assertTrue(SecurityMiddleware::throttle($key, 3, 60), 'allowed again after clear');
         SecurityMiddleware::clearThrottle($key);
+    }
+
+    public function testApcuAvailable(): void
+    {
+        // tests/bootstrap.php already refuses to run without it
+        $this->assertNull(SecurityMiddleware::apcuProblem());
     }
 }
