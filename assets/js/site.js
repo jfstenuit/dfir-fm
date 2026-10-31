@@ -2,7 +2,7 @@
 // script. A module runs once the document is parsed, so the elements exist.
 // Requests carry the CSRF token through api() (utils.js).
 
-if (document.getElementById('fileUploader')) {
+if (document.getElementById('main-table')) {
     const { init } = await import('./filemanager.js');
     init();
 }

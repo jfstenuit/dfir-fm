@@ -12,11 +12,11 @@ let pendingDelete = null;   // {id, type, name}: picked in a row, confirmed in t
 
 /**
  * The current directory as the server names it: "/" at the root, "/a/b"
- * below. The page's #cwd is "" at the root, which the access-rights actions
- * don't accept.
+ * below. Read from the listing, not the upload form, which is only on pages
+ * where the user may upload (#26).
  */
 function currentDirectory() {
-    return byId('cwd')?.value || '/';
+    return byId('main-table')?.dataset.cwd || '/';
 }
 
 const childPath = name => currentDirectory().replace(/\/$/, '') + '/' + name;

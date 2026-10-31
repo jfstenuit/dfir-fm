@@ -16,6 +16,8 @@ class FileManagerView
     public static function render($items,$cwd,$userPermissions,bool $canRefresh = false)
     {
         $e = fn($value) => htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+        // The rights ChunkedUpload enforces: no upload zone where it would refuse (#26)
+        $canUpload = !empty($userPermissions['can_upload']) || !empty($userPermissions['can_write']) || !empty($userPermissions['is_admin']);
         ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -41,7 +43,7 @@ class FileManagerView
     </div>
     <div class="col-sm-7">
       <ul class="navbar-nav justify-content-end ">
-      <?php if ((isset($userPermissions['can_upload']) && $userPermissions['can_upload']) || (isset($userPermissions['is_admin']) && $userPermissions['is_admin'])) : ?>
+      <?php if ($canUpload) : ?>
         <li class="nav-item">
           <a title="Upload" class="nav-link" href="#" data-bs-toggle="modal" data-bs-target="#uploadModal">
               <i class="bi bi-cloud-upload" aria-hidden="true"></i> Upload
@@ -97,7 +99,7 @@ class FileManagerView
   <form action="" method="post" class="pt-3">
     <div class="table-responsive">
 <?php $canDelete = !empty($userPermissions['can_write']) || !empty($userPermissions['is_admin']); ?>
-      <table id="main-table" class="table table-bordered table-striped table-hover table-sm" data-can-delete="<?php echo $canDelete ? '1' : '0'; ?>">
+      <table id="main-table" class="table table-bordered table-striped table-hover table-sm" data-can-delete="<?php echo $canDelete ? '1' : '0'; ?>" data-cwd="<?php echo $e($cwd); ?>">
         <thead class="table-light">
           <tr>
             <th class="col-name">Name</th>
@@ -146,7 +148,9 @@ class FileManagerView
     </div>
   </form>
 <?php
-UploadModal::render($cwd);
+if ($canUpload) {
+    UploadModal::render($cwd);
+}
 NewFolderModal::render();
 OperationResultModal::render();
 DeleteConfirmationModal::render();

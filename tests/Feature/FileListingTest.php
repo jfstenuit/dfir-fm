@@ -99,6 +99,36 @@ final class FileListingTest extends FeatureTestCase
         $this->assertStringContainsString('203.0.113.7', $body);
     }
 
+    /**
+     * The upload zone only where the server accepts uploads: the upload or
+     * write right, or an admin (#26). It used to be on every page.
+     */
+    public function testUploadZoneOnlyWhereUploadIsAllowed(): void
+    {
+        $this->server->addDirectory('/case-a');
+        $this->server->addDirectory('/case-b');
+        $this->server->addDirectory('/case-c');
+        $this->server->grantAccess(TestServer::BOB, '/case-a');
+        $this->server->grantAccess(TestServer::BOB, '/case-b', view: true, upload: false);
+        $this->server->grantAccess(TestServer::BOB, '/case-c', write: true, upload: false);
+
+        $bob = $this->bobClient();
+        $page = fn(string $p) => $bob->get('', ['query' => ['p' => $p]]);
+        foreach (['/case-a' => true, '/case-c' => true, '/' => false, '/case-b' => false] as $path => $allowed) {
+            $response = $page($path);
+            $this->assertSame(200, $response->status, $path);
+            $assert = $allowed ? 'assertStringContainsString' : 'assertStringNotContainsString';
+            $this->$assert('id="fileUploader"', $response->body, $path);
+            $this->$assert('data-bs-target="#uploadModal"', $response->body, $path);
+            // The page script loads either way, with the current directory
+            $this->assertStringContainsString('data-cwd="' . $path . '"', $response->body, $path);
+        }
+
+        foreach (['/', '/case-b'] as $path) {
+            $this->assertStringContainsString('id="fileUploader"', $this->adminClient()->get('', ['query' => ['p' => $path]])->body, $path);
+        }
+    }
+
     /** Upload names may contain <, > and &: they were printed raw (stored HTML injection) */
     public function testNamesAreEscaped(): void
     {
