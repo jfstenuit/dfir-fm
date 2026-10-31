@@ -776,7 +776,7 @@ Each backend is responsible for parsing its configuration from the `.env` file.
 - Only the local storage engine exists (Azure Blob and S3: #6, #7)
 - Refresh from storage: one folder at a time, not its subfolders; a missing file's record can't be forgotten from the UI; jobs belong to the administrator who started them
 - Password changes aren't logged, and the profile dialog doesn't ask for the current password
-- No forgotten-password reset (#1)
+- No self-service password reset or registration, by design (#1, D30): an administrator resets a forgotten password with "Resend invitation"
 - The events database file doesn't shrink after a purge (no `VACUUM`)
 - Login rate-limit counters are per server (APCu)
 
