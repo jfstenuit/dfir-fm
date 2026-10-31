@@ -85,7 +85,13 @@ App::setConfig($config);
 App::setDb($db);
 App::setLogger($logEngine);
 
-// Start session management
+// Start session management, in the application's own session directory
+$sessionSavePath = Config::sessionSavePath($config, BASE_PATH);
+if (!Session::configure($config, $sessionSavePath)) {
+    error_log("DFIR FM configuration error: session directory not writable: $sessionSavePath");
+    Response::triggerSystemError();
+    return;
+}
 Session::start();
 
 // Behind a proxy that nobody told us about: say so in the log (and on the admin page)
@@ -104,15 +110,23 @@ if (strpos($requestUri, $scriptName) === 0) {
 $requestUri = '/' . trim($requestUri, '/');
 
 // Authentication check. A session whose account was locked, deleted or
-// had its password changed elsewhere ends at once, answered as an expired
-// session (the JS clients treat a redirect to login as one).
+// had its password changed elsewhere ends at once, as does one past its
+// idle timeout or absolute lifetime; both are answered as an expired
+// session (the JS clients treat a redirect to login as one). A change of
+// client IP is logged, not refused.
 if ($requestUri !== '/login') {
-    $revoked = Session::isAuthenticated() ? Session::revocationCause($db) : null;
-    if ($revoked !== null) {
-        App::getLogger()->log('session_revoked', ['cause' => $revoked]);
-        Session::logout();
+    if (Session::isAuthenticated()) {
+        if (($revoked = Session::revocationCause($db)) !== null) {
+            App::getLogger()->log('session_revoked', ['cause' => $revoked]);
+            Session::logout();
+        } elseif (($expired = Session::expiryCause()) !== null) {
+            App::getLogger()->log('session_expired', ['cause' => $expired]);
+            Session::logout();
+        } elseif (($previousIp = Session::clientIpChange()) !== null) {
+            App::getLogger()->log('session_ip_changed', ['previous_ip' => $previousIp]);
+        }
     }
-    if ($revoked !== null || !Session::isAuthenticated() || !Session::isStillValid()) {
+    if (!Session::isAuthenticated()) {
         $currentUrl = $_SERVER['REQUEST_URI'];
         header('Location: login?redirect=' . urlencode($currentUrl));
         exit;

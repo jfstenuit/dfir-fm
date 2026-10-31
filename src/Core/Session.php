@@ -4,6 +4,54 @@ namespace Core;
 
 class Session
 {
+    /** Defaults of session_idle_timeout (1 hour) and session_max_lifetime (1 week), in seconds */
+    public const DEFAULT_IDLE_TIMEOUT = 3600;
+    public const DEFAULT_MAX_LIFETIME = 604800;
+
+    private static int $idleTimeout = self::DEFAULT_IDLE_TIMEOUT;
+    private static int $maxLifetime = self::DEFAULT_MAX_LIFETIME;
+    private static ?string $savePath = null;
+
+    /**
+     * Timeout settings from the configuration, with the defaults for
+     * missing or invalid values.
+     *
+     * @return array{idle:int, max:int}
+     */
+    public static function timeoutSettings(array $config): array
+    {
+        $positive = function ($key, $default) use ($config) {
+            $value = filter_var($config[$key] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            return $value === false ? $default : $value;
+        };
+
+        return [
+            'idle' => $positive('session_idle_timeout', self::DEFAULT_IDLE_TIMEOUT),
+            'max' => $positive('session_max_lifetime', self::DEFAULT_MAX_LIFETIME),
+        ];
+    }
+
+    /**
+     * Timeouts and session directory (Config::sessionSavePath()), before
+     * start(). The directory is created if needed.
+     *
+     * @return bool false if the directory can't be created or written to
+     */
+    public static function configure(array $config, string $savePath): bool
+    {
+        if (!is_dir($savePath) && !@mkdir($savePath, 0700, true) && !is_dir($savePath)) {
+            return false;
+        }
+        if (!is_writable($savePath)) {
+            return false;
+        }
+        $settings = self::timeoutSettings($config);
+        self::$idleTimeout = $settings['idle'];
+        self::$maxLifetime = $settings['max'];
+        self::$savePath = $savePath;
+        return true;
+    }
+
     public static function start()
     {
         if (session_status() === PHP_SESSION_NONE) {
@@ -11,6 +59,15 @@ class Session
             ini_set('session.use_strict_mode', '1');
             ini_set('session.use_only_cookies', '1');
             ini_set('session.use_trans_sid', '0');
+            if (self::$savePath !== null) {
+                // Our own directory: PHP's garbage collection is the only
+                // cleanup, and removes what the idle timeout has ended
+                // (php.ini may disable it, as Debian does in favour of cron)
+                ini_set('session.save_path', self::$savePath);
+                ini_set('session.gc_maxlifetime', (string)self::$idleTimeout);
+                ini_set('session.gc_probability', '1');
+                ini_set('session.gc_divisor', '100');
+            }
             // Caching headers are set by index.php (no-store on every
             // response, private, no-store on downloads), not by PHP's default
             // "nocache" limiter, which would overwrite them
@@ -63,18 +120,21 @@ class Session
         $_SESSION['user_id'] = $user['user_id'];
         $_SESSION['username'] = $user['username'];
         $_SESSION['session_version'] = (int)($user['session_version'] ?? 0);
+        $_SESSION['login_time'] = time();
         $_SESSION['last_activity'] = time();
+        $_SESSION['client_ip'] = Request::getClientIp();
     }
 
     /**
      * Why the session's account may no longer use it, or null if it may:
-     * 'missing' (no users row), 'deleted', or 'revoked' (users.session_version
-     * changed since login: locked, password changed or reset). Read on
-     * every request, so that revocation is immediate.
+     * 'missing' (no users row), 'deleted', 'locked', or 'revoked'
+     * (users.session_version changed since login: password changed or
+     * reset, invitation resent). Read on every request, so that revocation
+     * is immediate.
      */
     public static function revocationCause(\PDO $db): ?string
     {
-        $stmt = $db->prepare("SELECT deleted_at, session_version FROM users WHERE id = :id");
+        $stmt = $db->prepare("SELECT deleted_at, locked_at, session_version FROM users WHERE id = :id");
         $stmt->execute([':id' => self::getUserId()]);
         $user = $stmt->fetch(\PDO::FETCH_ASSOC);
 
@@ -83,6 +143,11 @@ class Session
         }
         if ($user['deleted_at'] !== null) {
             return 'deleted';
+        }
+        // Locking also changes the version; locked_at is checked on its own
+        // so that the cause is precise and doesn't depend on it
+        if ($user['locked_at'] !== null) {
+            return 'locked';
         }
         // Sessions opened before v5 have no version: they match the default 0
         if ((int)$user['session_version'] !== (int)($_SESSION['session_version'] ?? 0)) {
@@ -138,15 +203,40 @@ class Session
         }
     }
 
-    public static function isStillValid($timeout = 3600)
+    /**
+     * Why the session has expired, or null if it hasn't: 'idle' (no request
+     * for session_idle_timeout seconds) or 'max_lifetime' (logged in more
+     * than session_max_lifetime seconds ago, active or not). A session
+     * still valid records this request as its last activity.
+     */
+    public static function expiryCause(): ?string
     {
-        if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity'] > $timeout)) {
-            self::logout();
-            return false;
-        }
+        $now = time();
+        // Sessions opened before the absolute lifetime existed count from now
+        $_SESSION['login_time'] ??= $now;
 
-        $_SESSION['last_activity'] = time();
-        return true;
+        if (isset($_SESSION['last_activity']) && $now - $_SESSION['last_activity'] > self::$idleTimeout) {
+            return 'idle';
+        }
+        if ($now - $_SESSION['login_time'] > self::$maxLifetime) {
+            return 'max_lifetime';
+        }
+        $_SESSION['last_activity'] = $now;
+        return null;
+    }
+
+    /**
+     * The session's previous client IP if this request comes from another
+     * one, else null. The session goes on (mobile networks and proxies with
+     * several egress addresses change it legitimately): the change is only
+     * logged. Sessions opened before this check start tracking now.
+     */
+    public static function clientIpChange(): ?string
+    {
+        $ip = Request::getClientIp();
+        $previous = $_SESSION['client_ip'] ?? $ip;
+        $_SESSION['client_ip'] = $ip;
+        return $previous !== $ip ? $previous : null;
     }
 }
 ?>

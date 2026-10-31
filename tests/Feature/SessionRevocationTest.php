@@ -27,8 +27,16 @@ final class SessionRevocationTest extends FeatureTestCase
         $this->assertSame(200, $bob->get('')->status);
 
         $this->assertTrue($admin->postWithCsrf('admin', ['a' => 'lockUser', 'email' => TestServer::BOB])->json()['success']);
-        $this->assertRevoked($bob, 'revoked');
+        $this->assertRevoked($bob, 'locked');
         $this->assertSame(200, $admin->get('')->status, "the admin's own session is unaffected");
+    }
+
+    /** locked_at alone is enough, whatever happens to session_version */
+    public function testLockedAccountEndsTheSessionWithoutVersionChange(): void
+    {
+        $bob = $this->bobClient();
+        $this->server->db()->exec("UPDATE users SET locked_at = '2026-10-31 00:00:00' WHERE username = 'bob@test.local'");
+        $this->assertRevoked($bob, 'locked');
     }
 
     public function testDeletionEndsTheSession(): void

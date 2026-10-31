@@ -103,6 +103,14 @@ final class ConfigTest extends TestCase
         $this->assertSame('/app/db/app.sqlite', Config::databasePath(['database_path' => 'db/app.sqlite'], '/app'));
     }
 
+    public function testSessionSavePath(): void
+    {
+        $this->assertSame('/app/storage/sessions', Config::sessionSavePath([], '/app'));
+        $this->assertSame('/app/storage/sessions', Config::sessionSavePath(['session_save_path' => ' '], '/app'));
+        $this->assertSame('/data/sessions', Config::sessionSavePath(['session_save_path' => '/data/sessions'], '/app'));
+        $this->assertSame('/app/run/sessions', Config::sessionSavePath(['session_save_path' => 'run/sessions'], '/app'));
+    }
+
     public function testMissingFileWithoutOverridesRefused(): void
     {
         $this->expectExceptionMessage('Environment file not found');

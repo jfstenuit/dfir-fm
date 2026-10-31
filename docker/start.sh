@@ -5,8 +5,9 @@
 #
 # First, as root: give www-data the uid/gid of APP_UID/APP_GID (default 82,
 # the image's), so that the processes can write to host directories owned by
-# that user, and hand the Docker volumes mounted under /data over to it. Host
-# directories (APP_FILES_DIR, APP_LOG_DIR set) are never changed.
+# that user, and hand the Docker volumes mounted under /data, and the session
+# directory, over to it. Host directories (APP_FILES_DIR, APP_LOG_DIR set) are
+# never changed.
 
 uid=${APP_UID:-82}
 gid=${APP_GID:-82}
@@ -20,7 +21,7 @@ fi
 if [[ $(id -u www-data) != "$uid" ]]; then
     usermod -o -u "$uid" -g "$gid" www-data || exit 1
 fi
-volumes=(/data/database)
+volumes=(/data/database /data/sessions)
 [[ -z $APP_FILES_DIR ]] && volumes+=(/data/files)
 [[ -z $APP_LOG_DIR ]] && volumes+=(/data/logs)
 for dir in "${volumes[@]}"; do

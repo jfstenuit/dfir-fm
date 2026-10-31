@@ -44,9 +44,12 @@ RUN composer dump-autoload --no-dev --optimize \
 #   /data/database  the SQLite database (database_path)
 #   /data/logs      the events database (events_database_path) and the log
 #                   file (log_file_path, with log_engine=file)
-RUN mkdir -p /data/files /data/database /data/logs \
-    && chown www-data:www-data /data/files /data/database /data/logs \
-    && chmod 750 /data/files /data/database /data/logs
+#   /data/sessions  the PHP sessions (session_save_path), not a volume:
+#                   recreating the container logs everyone out
+RUN mkdir -p /data/files /data/database /data/logs /data/sessions \
+    && chown www-data:www-data /data/files /data/database /data/logs /data/sessions \
+    && chmod 750 /data/files /data/database /data/logs \
+    && chmod 700 /data/sessions
 
 # The paths, inside the container. DFIRFM_<key> variables override the
 # keys of a mounted .env, so the same .env serves a host install and the
@@ -55,7 +58,8 @@ RUN mkdir -p /data/files /data/database /data/logs \
 ENV DFIRFM_BASE_STORAGE_DIRECTORY=/data/files \
     DFIRFM_DATABASE_PATH=/data/database/app.sqlite \
     DFIRFM_EVENTS_DATABASE_PATH=/data/logs/events.sqlite \
-    DFIRFM_LOG_FILE_PATH=/data/logs/dfir-fm.log
+    DFIRFM_LOG_FILE_PATH=/data/logs/dfir-fm.log \
+    DFIRFM_SESSION_SAVE_PATH=/data/sessions
 
 VOLUME ["/data/files", "/data/database", "/data/logs"]
 
