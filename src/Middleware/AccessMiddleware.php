@@ -280,6 +280,44 @@ class AccessMiddleware
         ];
     }
 
+    /**
+     * The directories a non-admin user has a right on (view, upload or
+     * write), as path => whether the user can read it
+     */
+    public static function accessibleDirectories($db, $userId): array
+    {
+        $stmt = $db->prepare("
+            SELECT d.path, MAX(ar.can_view)
+            FROM directories d
+            JOIN access_rights ar ON ar.directory_id = d.id
+            JOIN user_group ug ON ar.group_id = ug.group_id
+            WHERE ug.user_id = :user_id
+            AND (ar.can_view = 1 OR ar.can_upload = 1 OR ar.can_write = 1)
+            GROUP BY d.path
+        ");
+        $stmt->execute([':user_id' => $userId]);
+        return array_map('boolval', $stmt->fetchAll(PDO::FETCH_KEY_PAIR));
+    }
+
+    /**
+     * Whether a user may learn that a directory exists: the root, a
+     * directory the user has a right on, or a parent of one (its name is
+     * in the user's own paths). Any other directory must answer exactly
+     * like one that does not exist (#24).
+     */
+    public static function canSeeDirectory($db, $userId, string $path): bool
+    {
+        if ($path === '/' || self::isAdmin($db, $userId)) {
+            return true;
+        }
+        foreach (array_keys(self::accessibleDirectories($db, $userId)) as $accessible) {
+            if ($accessible === $path || strpos($accessible, $path . '/') === 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static function getDirectoryInfo($db, $selector)
     {
         $query = "
@@ -397,25 +435,16 @@ class AccessMiddleware
         }
 
         // Step 1: Get accessible paths
-        $stmt = $db->prepare("
-            SELECT d.id, d.path
-            FROM directories d
-            JOIN access_rights ar ON ar.directory_id = d.id
-            JOIN user_group ug ON ar.group_id = ug.group_id
-            WHERE ug.user_id = :user_id
-            AND (ar.can_view = 1 OR ar.can_upload = 1 OR ar.can_write = 1)
-        ");
-        $stmt->execute([':user_id' => $userId]);
-        $accessiblePaths = $stmt->fetchAll(PDO::FETCH_KEY_PAIR); // id => path
+        $accessiblePaths = self::accessibleDirectories($db, $userId); // path => can_read
 
         // Step 2: Extract immediate children of cwd
         $visibleSubpaths = [];
-        foreach ($accessiblePaths as $id => $path) {
+        foreach (array_keys($accessiblePaths) as $path) {
             if (strpos($path, $cwdPrefix) === 0) {
                 $remaining = substr($path, strlen($cwdPrefix));
                 if ($remaining !== '' && strpos($remaining, '/') === false) {
                     // It's a direct child
-                    $visibleSubpaths[$id] = $cwdPrefix . $remaining;
+                    $visibleSubpaths[] = $path;
                 }
             }
         }
@@ -437,8 +466,18 @@ class AccessMiddleware
                 LEFT JOIN users u ON d.created_by = u.id
                 WHERE d.path IN ($placeholders)
             ");
-            $stmt->execute(array_values($visibleSubpaths));
+            $stmt->execute($visibleSubpaths);
             $directories = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Who created a folder, and from where, only for its readers:
+            // contributors must not learn an analyst's identity or IP (#25)
+            foreach ($directories as &$directory) {
+                if (!$accessiblePaths[$cwdPrefix . $directory['name']]) {
+                    $directory['created_by'] = null;
+                    $directory['created_from'] = null;
+                }
+            }
+            unset($directory);
         }
 
         // Fetch files

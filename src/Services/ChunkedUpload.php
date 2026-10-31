@@ -490,6 +490,11 @@ final class ChunkedUpload
             $this->logger->log('upload_denied', ['directory' => $selector, 'cause' => 'Directory does not exist']);
             throw new UploadException(404, 'NoSuchDirectory', 'This folder does not exist.', $terminal);
         }
+        // A directory the user may not know about answers like a missing one (#24)
+        if (!AccessMiddleware::canSeeDirectory($this->db, $userId, $directory['path'])) {
+            $this->logger->log('upload_denied', ['directory' => $directory['path'], 'cause' => 'Access denied']);
+            throw new UploadException(404, 'NoSuchDirectory', 'This folder does not exist.', $terminal);
+        }
         $rights = AccessMiddleware::checkAccess($this->db, $directory['path'], $userId);
         if (!($rights['can_write'] || $rights['can_upload'])) {
             $this->logger->log('upload_denied', ['directory' => $directory['path'], 'cause' => 'Access denied']);

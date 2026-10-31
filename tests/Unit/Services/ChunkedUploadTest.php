@@ -364,7 +364,8 @@ final class ChunkedUploadTest extends TestCase
         $service = $this->service();
         $this->assertRefused(403, 'AccessDenied', fn() => $service->probe(self::EVE, '', 'x', 1));
         $this->assertRefused(403, 'AccessDenied', fn() => $this->send('abc', user: self::EVE));
-        $this->assertRefused(403, 'AccessDenied', fn() => $this->send('abc', user: self::BOB, cwd: '/case'));
+        // A folder without any right answers like a missing one (#24)
+        $this->assertRefused(404, 'NoSuchDirectory', fn() => $this->send('abc', user: self::BOB, cwd: '/case'));
         $this->assertRefused(404, 'NoSuchDirectory', fn() => $service->probe(self::ALICE, '/nope', 'x', 1));
 
         // Rights revoked between transfer and completion
