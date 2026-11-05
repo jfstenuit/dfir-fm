@@ -120,6 +120,7 @@ project-root/
 │   │       ├── OidcProvider.php # Discovery document and JWKS, cached in APCu; userinfo
 │   │       ├── IdTokenValidator.php # ID token: signature, iss, aud/azp, lifetime, nonce, max_age, MFA
 │   │       ├── Claims.php     # Claims of a validated token: dotted paths, address, admin claim, userinfo fallback
+│   │       ├── AccountResolver.php # The account of an identity: link, provision, admin sync (D33, D34)
 │   │       ├── HttpsClient.php  # Interface of every IdP call (stubbed in tests)
 │   │       ├── CurlHttpsClient.php # Verified HTTPS, short timeouts, no redirects
 │   │       ├── HttpsResponse.php
