@@ -81,6 +81,29 @@ final class OidcProvider
         return $jwks;
     }
 
+    /**
+     * The userinfo answer for an access token, for a claim the ID token
+     * doesn't carry. Null when the IdP has no userinfo endpoint.
+     * @throws OidcException when the endpoint fails: a missing admin claim
+     *   must not be read as "not an admin" because of an outage
+     */
+    public function userinfo(string $accessToken): ?array
+    {
+        $endpoint = $this->metadata()['userinfo_endpoint'] ?? null;
+        if (!is_string($endpoint)) {
+            return null;
+        }
+        if (strtolower((string)parse_url($endpoint, PHP_URL_SCHEME)) !== 'https') {
+            throw new OidcException("The discovery document's userinfo_endpoint isn't HTTPS");
+        }
+        $response = $this->http->get($endpoint, ["Authorization: Bearer $accessToken"]);
+        if ($response->status !== 200) {
+            throw new OidcException("The userinfo endpoint answered HTTP {$response->status}");
+        }
+        // A signed (application/jwt) answer isn't supported: we never register for one
+        return $response->json() ?? throw new OidcException('The userinfo answer is not a JSON object');
+    }
+
     /** Drop the cached discovery document and JWKS */
     public function forget(): void
     {

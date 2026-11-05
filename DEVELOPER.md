@@ -117,12 +117,15 @@ project-root/
 │   │   ├── EventImport.php    # Import of older log files
 │   │   └── Oidc/              # OIDC sign-in (#9, optional)
 │   │       ├── OidcConfig.php # The oidc_* settings: state, validation, domain match
-│   │       ├── OidcProvider.php # Discovery document and JWKS, cached in APCu
+│   │       ├── OidcProvider.php # Discovery document and JWKS, cached in APCu; userinfo
+│   │       ├── IdTokenValidator.php # ID token: signature, iss, aud/azp, lifetime, nonce, max_age, MFA
+│   │       ├── Claims.php     # Claims of a validated token: dotted paths, address, admin claim, userinfo fallback
 │   │       ├── HttpsClient.php  # Interface of every IdP call (stubbed in tests)
 │   │       ├── CurlHttpsClient.php # Verified HTTPS, short timeouts, no redirects
 │   │       ├── HttpsResponse.php
 │   │       ├── ProviderCheck.php # The checks of bin/oidc-check.php
-│   │       └── OidcException.php
+│   │       ├── OidcException.php
+│   │       └── OidcRefusal.php # A refused sign-in, with its log cause
 │   └── Views/                 # Templates for rendering HTML
 │       ├── Modals/            # Bootstrap modals
 │       │   ├── AccessRightsModal.php

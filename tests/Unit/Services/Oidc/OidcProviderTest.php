@@ -127,6 +127,28 @@ final class OidcProviderTest extends TestCase
         }
     }
 
+    public function testUserinfo(): void
+    {
+        $this->assertNull($this->provider->userinfo('at-1'), 'no userinfo endpoint');
+
+        $this->http->answers[$this->discoveryUrl()] = new HttpsResponse(200, json_encode($this->metadata() + ['userinfo_endpoint' => 'https://idp.example.com/userinfo']));
+        $this->provider->forget();
+        $this->http->answers['https://idp.example.com/userinfo'] = new HttpsResponse(200, '{"sub":"u1","groups":["a"]}');
+        $this->assertSame(['sub' => 'u1', 'groups' => ['a']], $this->provider->userinfo('at-1'));
+        $this->assertSame(['Authorization: Bearer at-1'], end($this->http->calls)['headers']);
+
+        // A failure is an error, not "no claim": an outage must not revoke admin rights
+        foreach ([new HttpsResponse(401, ''), new HttpsResponse(200, 'eyJhbGciOi.signed.jwt')] as $answer) {
+            $this->http->answers['https://idp.example.com/userinfo'] = $answer;
+            try {
+                $this->provider->userinfo('at-1');
+                $this->fail("accepted HTTP {$answer->status} {$answer->body}");
+            } catch (OidcException $e) {
+                $this->assertMatchesRegularExpression('/HTTP 401|not a JSON object/', $e->getMessage());
+            }
+        }
+    }
+
     public function testCurlClientRefusesPlainHttp(): void
     {
         $this->expectException(OidcException::class);
