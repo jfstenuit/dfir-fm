@@ -2,86 +2,18 @@
 namespace Tests\Feature;
 
 use Controllers\OidcController;
-use Tests\Support\FeatureTestCase;
+use Tests\Support\MockOidcTestCase;
 use Tests\Support\HttpClient;
 use Tests\Support\HttpResponse;
 use Tests\Support\MockOidcServer;
 
 /**
  * GET /login/oidc and /login/oidc/callback (#9, Phase 16 step 6), against
- * mock-oidc. Skipped when DFIRFM_MOCK_OIDC_BIN isn't set.
+ * mock-oidc (see MockOidcTestCase)
  */
-final class OidcLoginTest extends FeatureTestCase
+final class OidcLoginTest extends MockOidcTestCase
 {
     private const CAROL = 'carol@oidc.test';
-
-    private ?MockOidcServer $idp = null;
-
-    protected function setUp(): void
-    {
-        if (($why = MockOidcServer::unavailable()) !== null) {
-            $this->markTestSkipped($why);
-        }
-        $this->idp = new MockOidcServer();
-        parent::setUp();
-    }
-
-    protected function tearDown(): void
-    {
-        if ($this->idp !== null) {
-            parent::tearDown();
-            $this->idp->stop();
-        }
-    }
-
-    protected function serverEnv(): array
-    {
-        return $this->idp->env();
-    }
-
-    private static function claims(string $email, bool $admin = false, array $extra = []): array
-    {
-        return $extra + [
-            'email' => $email,
-            'email_verified' => true,
-            'name' => 'Carol Example',
-            'groups' => $admin ? ['staff', MockOidcServer::ADMIN_VALUE] : ['staff'],
-        ];
-    }
-
-    /** GET /login/oidc: the authorization URL it redirects to */
-    private function start(HttpClient $client, array $query = []): string
-    {
-        $response = $client->get('login/oidc', ['query' => $query]);
-        $this->assertSame(302, $response->status, $response->body);
-        $location = (string)$response->header('location');
-        $this->assertStringStartsWith($this->idp->issuer . '/authorize?', $location);
-        return $location;
-    }
-
-    /** The whole round trip: start, sign in at the IdP, callback */
-    private function signIn(HttpClient $client, string $subject, array $claims, array $query = []): HttpResponse
-    {
-        $answer = $this->idp->login($this->start($client, $query), $subject, $claims);
-        return $client->get('login/oidc/callback', ['query' => ['code' => $answer['code'], 'state' => $answer['state']]]);
-    }
-
-    private function assertFailurePage(HttpResponse $response, string $cause, int $status = 403): void
-    {
-        $this->assertSame($status, $response->status, $response->body);
-        $this->assertNull($response->header('location'), 'no automatic redirect');
-        $this->assertStringNotContainsString('http-equiv', $response->body);
-        $this->assertStringContainsString('Sign-in was not permitted', $response->body);
-        $this->assertStringContainsString('href="/login/oidc"', $response->body);
-        $this->assertStringContainsString('href="/login?other"', $response->body);
-        $this->assertNull($response->setCookie(OidcController::EMAIL_COOKIE), 'no cookie on failure');
-
-        $this->assertMatchesRegularExpression('#<code id="correlationId">([0-9a-f]{16})</code>#', $response->body);
-        preg_match('#<code id="correlationId">([0-9a-f]{16})</code>#', $response->body, $m);
-        $failures = array_values(array_filter($this->server->logEntries('login_oidc_failure'), fn($e) => ($e['correlation_id'] ?? null) === $m[1]));
-        $this->assertCount(1, $failures, 'the log entry has the page\'s correlation ID');
-        $this->assertSame($cause, $failures[0]['cause'], $failures[0]['detail'] ?? '');
-    }
 
     public function testAuthorizationRequest(): void
     {

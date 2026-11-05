@@ -1,9 +1,9 @@
 #!/bin/sh
 # tests/Support/fetch-mock-oidc.sh - download the pinned meigma/mock-oidc
 # release (the test IdP of the OIDC feature tests) into .cache/, check its
-# SHA-256, and print the path to set as DFIRFM_MOCK_OIDC_BIN:
+# SHA-256, and print the path to set as OIDC_MOCK_BIN:
 #
-#   export DFIRFM_MOCK_OIDC_BIN="$(tests/Support/fetch-mock-oidc.sh)"
+#   export OIDC_MOCK_BIN="$(tests/Support/fetch-mock-oidc.sh)"
 #
 # linux/amd64 only (CI and the dev host). A new version means a new
 # VERSION and SHA256, from the release's checksums.txt.

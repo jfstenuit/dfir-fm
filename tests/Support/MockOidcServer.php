@@ -3,7 +3,7 @@
 namespace Tests\Support;
 
 /**
- * Runs meigma/mock-oidc (DFIRFM_MOCK_OIDC_BIN, see fetch-mock-oidc.sh) on
+ * Runs meigma/mock-oidc (OIDC_MOCK_BIN, see fetch-mock-oidc.sh) on
  * free local ports, like FakeSmtpServer:
  *   - HTTPS with a certificate for 127.0.0.1 from a throwaway CA, given to
  *     the test server as oidc_ca_file ($caFile)
@@ -37,12 +37,12 @@ final class MockOidcServer
     /** Why the mock can't run here, or null */
     public static function unavailable(): ?string
     {
-        $binary = getenv('DFIRFM_MOCK_OIDC_BIN');
+        $binary = getenv('OIDC_MOCK_BIN');
         if ($binary === false || $binary === '') {
-            return 'DFIRFM_MOCK_OIDC_BIN is not set (tests/Support/fetch-mock-oidc.sh downloads mock-oidc)';
+            return 'OIDC_MOCK_BIN is not set (tests/Support/fetch-mock-oidc.sh downloads mock-oidc)';
         }
         if (!is_file($binary) || !is_executable($binary)) {
-            return "DFIRFM_MOCK_OIDC_BIN is not an executable file: $binary";
+            return "OIDC_MOCK_BIN is not an executable file: $binary";
         }
         return null;
     }
@@ -60,7 +60,7 @@ final class MockOidcServer
         $this->issuer = "https://127.0.0.1:$this->port/" . self::ISSUER_ID;
 
         $this->process = proc_open([
-            getenv('DFIRFM_MOCK_OIDC_BIN'), 'serve',
+            getenv('OIDC_MOCK_BIN'), 'serve',
             '--addr', "127.0.0.1:$this->port",
             '--control-addr', "127.0.0.1:$this->controlPort",
             '--control-token', $this->controlToken,
@@ -126,13 +126,19 @@ final class MockOidcServer
             : ['frozen' => true, 'instant' => $instant->format(\DateTimeInterface::RFC3339)]);
     }
 
-    public function stop(): void
+    /** Stop serving (an IdP outage), keeping the CA file the test server is configured with */
+    public function halt(): void
     {
         if (is_resource($this->process)) {
             proc_terminate($this->process);
             proc_close($this->process);
         }
         $this->process = null;
+    }
+
+    public function stop(): void
+    {
+        $this->halt();
         foreach (glob("$this->dir/*") ?: [] as $file) {
             unlink($file);
         }

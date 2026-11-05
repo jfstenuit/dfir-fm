@@ -152,11 +152,14 @@ Installing it is another matter: `docker compose pull` downloads the image, and 
   ```
 - **Without Docker:** run `composer install --no-dev` on a connected machine with PHP 8.4, then copy the whole directory, `vendor/` included, to the air-gapped host and continue with step 3 of [Installation without Docker](#installation-without-docker). The host still needs PHP and its extensions, from its own package mirror.
 
-### OIDC sign-in (in progress, #9)
-With OIDC configured, every address of `oidc_email_domain` signs in through the identity provider (IdP): the login page sends it there after the e-mail step, and refuses a password for it. Every other address keeps its password. To set it up:
+### OIDC sign-in (optional, #9)
+With OIDC configured, every address of one mail domain (`oidc_email_domain`) signs in through your identity provider (IdP): the login page sends it there after the e-mail step, and refuses a password for it. Every other address keeps its password. Without the `oidc_*` keys nothing changes, and DFIR FM never calls an IdP. To set it up:
 
-1. **Register DFIR FM at the IdP** as a confidential client using the authorization code flow, with PKCE allowed and `client_secret_basic` authentication. The redirect URI is `https://<your site>/login/oidc/callback`, and it must be registered exactly as `oidc_redirect_uri` says.
+1. **Register DFIR FM at the IdP** as a confidential client using the authorization code flow, with PKCE allowed and `client_secret_basic` authentication. The redirect URI is `https://<your site>/login/oidc/callback`, and it must be registered exactly as `oidc_redirect_uri` says. For the logout to come back to DFIR FM, register `https://<your site>/login?signed_out` as a post-logout redirect URI where the IdP asks for one.
 2. **Set the seven required `oidc_*` keys** (see `env.sample`). With only some of them set, or an invalid value, the application answers 503 and gives the reason in the PHP error log.
+   - The token must carry the address (`oidc_email_claim`, default `email`), verified (`email_verified`, unless `oidc_require_email_verified=false`), and in the domain.
+   - Administrators are the users whose `oidc_admin_claim` (e.g. `groups`, `roles`, Keycloak's `realm_access.roles`) contains `oidc_admin_value`, from the ID token or else from userinfo. Prefer stable IDs (Entra object IDs, app roles) to names that can be renamed. Entra's groups overage is refused: use app roles (`roles`).
+   - Only a single-tenant issuer is accepted (not Entra's `common`, `organizations` or `consumers`).
 3. **Check the IdP**, as the web server user:
    ```bash
    sudo -u www-data php bin/oidc-check.php
@@ -170,7 +173,19 @@ With OIDC configured, every address of `oidc_email_domain` signs in through the 
 
    Every run is logged as `cli_oidc_check`.
 4. **Keep a break-glass administrator outside the domain.** An address of the domain can't sign in with a password, so `bin/create-admin.php` refuses it: create the first administrator, and keep one, with an address outside the domain. It is how you get in when the IdP is down or misconfigured. The Users tab warns when none is left.
-5. **Sign in with a real account** of the domain on the login page. A refused sign-in shows "Sign-in was not permitted" with a reference: the `login_oidc_failure` entry with that `correlation_id` gives the cause. After a sign-in, the browser remembers the address in the `dfirfm_login_email` cookie (the address only; `oidc_remember_days`), and the login page then goes straight to the IdP, except after a logout or a failed sign-in, where it offers "Sign in with …" or "Use a different e-mail". Logging out of DFIR FM also logs out of the IdP when it advertises an `end_session_endpoint`; the IdP then sends the browser back to `https://<your site>/login?signed_out`, which some IdPs require registering as a post-logout redirect URI. Accounts signed in through the IdP have no password in DFIR FM, so they get no "Change Password". If the IdP's certificate comes from an internal CA, set `oidc_ca_file` to that CA's PEM file: it then replaces the system CA store for IdP calls.
+5. **Sign in with a real account** of the domain on the login page. A refused sign-in shows "Sign-in was not permitted" with a reference: the `login_oidc_failure` entry with that `correlation_id` gives the cause.
+
+If the IdP's certificate comes from an internal CA, set `oidc_ca_file` to that CA's PEM file: it then replaces the system CA store for IdP calls.
+
+**Trust boundary.** Setting `oidc_email_domain` makes the IdP authoritative for the whole domain:
+- Whoever controls an IdP account with a verified address of the domain controls the DFIR FM account of that address. An existing password account of the domain is converted at its first IdP sign-in (its password is dropped, its rights kept), and every identity of the domain gets an account at its first sign-in, without rights until an administrator invites it into a folder.
+- Granting the admin claim at the IdP grants full DFIR FM admin rights: every folder, the users and the access rights. Keep that group small and well governed, preferably with MFA enforced at the IdP (`oidc_require_mfa` also checks it in the token). Admin rights follow the IdP at every sign-in; a session already open keeps its rights until it ends (`session_idle_timeout`, `session_max_lifetime`). Lock the account in DFIR FM to cut access at once.
+
+**How it behaves.**
+- After a sign-in, the browser remembers the address in the `dfirfm_login_email` cookie (the address only, nothing secret; `oidc_remember_days`), and the login page then goes straight to the IdP. Not after a logout or a failed sign-in: the page then offers "Sign in with …" or "Use a different e-mail" (which forgets the address).
+- Logging out of DFIR FM also logs out of the IdP when it advertises an `end_session_endpoint` (RP-initiated logout), and the IdP sends the browser back to the "Signed out" page. Whether the IdP ends its own session there is its configuration (see Authentik below).
+- Accounts of the domain have no password in DFIR FM: no "Change Password", no password reset; "Resend invitation" sends a reminder to sign in with the IdP. Their admin membership is shown as "Managed by …" and can't be changed in DFIR FM.
+- A failure of the IdP affects the addresses of the domain only.
 
 **Accounts and identities.** At its first sign-in, an identity (the IdP's issuer and `sub`) is linked to the account of its address, or gets a new account. When the IdP changes a user's `sub` (an account re-created at the IdP, a migration to another IdP), the sign-in is refused (`subject_conflict`) rather than given to the account of the address. After checking, relink it on the server:
 ```bash

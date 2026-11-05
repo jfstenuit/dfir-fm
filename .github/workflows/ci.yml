@@ -40,5 +40,12 @@ jobs:
       - name: Audit dependencies
         run: composer audit
 
+      # The test IdP of the OIDC feature tests (#9), pinned by SHA-256; with
+      # OIDC_MOCK_REQUIRED=1 they fail instead of skipping without it
+      - name: Fetch mock-oidc
+        run: echo "OIDC_MOCK_BIN=$(tests/Support/fetch-mock-oidc.sh)" >> "$GITHUB_ENV"
+
       - name: Tests
         run: composer test
+        env:
+          OIDC_MOCK_REQUIRED: '1'
