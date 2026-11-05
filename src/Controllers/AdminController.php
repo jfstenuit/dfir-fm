@@ -454,7 +454,7 @@ class AdminController
     {
         header('Content-Type: application/json');
 
-        $stmt = $db->query("SELECT id, username, `password`, invitation_token, token_expiry, locked_at FROM users WHERE deleted_at IS NULL");
+        $stmt = $db->query("SELECT id, username, `password`, auth_source, invitation_token, token_expiry, locked_at FROM users WHERE deleted_at IS NULL");
         $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $result = [];
@@ -462,12 +462,13 @@ class AdminController
         foreach ($users as $user) {
             $identifier = $user['username'];
 
-            // locked: by an administrator; active: has a password; invited:
-            // no password yet, with a pending link or an expired one
+            // locked: by an administrator; active: has a password, or signs
+            // in through the IdP; invited: no password yet, with a pending
+            // link or an expired one
             $pending = !empty($user['invitation_token']) && !empty($user['token_expiry']) && strtotime($user['token_expiry']) > time();
             if ($user['locked_at'] !== null) {
                 $status = 'locked';
-            } elseif (!empty($user['password']) && $user['password'] !== '!') {
+            } elseif ($user['auth_source'] === 'oidc' || (!empty($user['password']) && $user['password'] !== '!')) {
                 $status = 'active';
             } else {
                 $status = 'invited';
@@ -689,7 +690,9 @@ class AdminController
 
         // Credentials go (password and pending invitation) and open sessions
         // end; locked_at keeps the account from being re-invited until unlocked
-        $stmt = $db->prepare("UPDATE users SET password = '!', invitation_token = NULL, token_expiry = NULL,
+        // (an OIDC account has no password to remove: it stays NULL)
+        $stmt = $db->prepare("UPDATE users SET password = CASE WHEN auth_source = 'oidc' THEN NULL ELSE '!' END,
+                                     invitation_token = NULL, token_expiry = NULL,
                                      session_version = session_version + 1, locked_at = :now, locked_by = :by
                               WHERE id = :id");
         $success = $stmt->execute([':now' => gmdate('Y-m-d H:i:s'), ':by' => Session::getUserId(), ':id' => $user['id']]);

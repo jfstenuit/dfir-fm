@@ -55,7 +55,7 @@ final class DatabaseTest extends TestCase
     {
         $db = $this->init('fresh.sqlite');
 
-        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(Database::SCHEMA_VERSION, self::scalar($db, 'PRAGMA user_version'));
         $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM users'), 'no seeded user');
         $this->assertSame(1, self::scalar($db, 'SELECT COUNT(*) FROM groups WHERE is_admin = 1'));
         $this->assertSame(['user_id', 'group_id'], $db->query('PRAGMA table_info(user_group)')->fetchAll(PDO::FETCH_COLUMN, 1));
@@ -146,7 +146,7 @@ final class DatabaseTest extends TestCase
         });
 
         $db = $this->init('v1.sqlite');
-        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(Database::SCHEMA_VERSION, self::scalar($db, 'PRAGMA user_version'));
         $this->assertContains('client_uuid', $db->query('PRAGMA table_info(uploads)')->fetchAll(PDO::FETCH_COLUMN, 1));
         $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM uploads'), 'v1 uploads discarded');
         $this->assertSame(3, self::scalar($db, 'SELECT COUNT(*) FROM files'), 'files kept; NULL hashes may repeat');
@@ -165,7 +165,7 @@ final class DatabaseTest extends TestCase
         $db->exec("PRAGMA user_version = 2");
 
         $db = $this->init('v2.sqlite');
-        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(Database::SCHEMA_VERSION, self::scalar($db, 'PRAGMA user_version'));
         $columns = $db->query('PRAGMA table_info(users)')->fetchAll(PDO::FETCH_COLUMN, 1);
         $this->assertContains('deleted_at', $columns);
         $this->assertContains('deleted_by', $columns);
@@ -185,7 +185,7 @@ final class DatabaseTest extends TestCase
         $db->exec("PRAGMA user_version = 5");
 
         $db = $this->init('v5.sqlite');
-        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(Database::SCHEMA_VERSION, self::scalar($db, 'PRAGMA user_version'));
         $locked = $db->query("SELECT username FROM users WHERE locked_at IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
         $this->assertSame(['locked@example.org'], $locked, 'an expired invitation is not a lock');
         $this->assertSame(0, self::scalar($db, "SELECT COUNT(*) FROM users WHERE username = 'locked@example.org' AND invitation_token IS NOT NULL"));
@@ -203,7 +203,7 @@ final class DatabaseTest extends TestCase
         $db->exec("PRAGMA user_version = 6");
 
         $db = $this->init('v6.sqlite');
-        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(Database::SCHEMA_VERSION, self::scalar($db, 'PRAGMA user_version'));
         $this->assertSame(['upload', null, null], $db->query("SELECT origin, integrity, checked_at FROM files")->fetch(PDO::FETCH_NUM), 'existing files were uploaded');
         $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM refresh_jobs'));
         $this->expectException(\PDOException::class);
@@ -228,7 +228,7 @@ final class DatabaseTest extends TestCase
         $db->exec("PRAGMA user_version = 3");
 
         $db = $this->init('v3.sqlite');
-        $this->assertSame(7, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame(Database::SCHEMA_VERSION, self::scalar($db, 'PRAGMA user_version'));
 
         // Tombstones for the missing uploader, creator and upload owner
         $tombstones = $db->query("SELECT id, username FROM users WHERE deleted_at IS NOT NULL ORDER BY id")->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -265,6 +265,116 @@ final class DatabaseTest extends TestCase
 
         $this->expectException(\PDOException::class);
         $db->exec("INSERT INTO user_group (user_id, group_id) VALUES (2, 999)");
+    }
+
+    /** A v7 database: the current schema, with the users table of v7 */
+    private function v7Database(string $name, callable $seed): PDO
+    {
+        $this->init($name);
+        $db = new PDO("sqlite:$this->dir/$name");
+        $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $db->exec("DROP INDEX users_oidc");
+        $db->exec("DROP TABLE users");
+        $db->exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password TEXT NOT NULL,
+            email TEXT UNIQUE, invitation_token TEXT, token_expiry DATETIME, deleted_at DATETIME, deleted_by INTEGER,
+            session_version INTEGER NOT NULL DEFAULT 0, locked_at DATETIME, locked_by INTEGER)");
+        $db->exec("PRAGMA user_version = 7");
+        $seed($db);
+        return $db;
+    }
+
+    private const V7_COLUMNS = 'id, username, password, email, invitation_token, token_expiry, deleted_at, deleted_by, session_version, locked_at, locked_by';
+
+    public function testMigrationV8RebuildsUsers(): void
+    {
+        $old = $this->v7Database('v7.sqlite', function (PDO $db) {
+            $hash = password_hash('s3cret-alice-pw', PASSWORD_DEFAULT);
+            $db->exec("INSERT INTO users (id, username, password, email, session_version) VALUES
+                (1, 'admin@example.org', '$hash', 'admin@example.org', 3),
+                (2, 'alice@example.com', '$hash', 'alice@example.com', 0),
+                (3, 'invited@example.com', '!', 'invited@example.com', 0),
+                (4, 'locked@example.com', '!', 'locked@example.com', 1),
+                (5, 'deleted:2026-10-01:5', '!', 'deleted:2026-10-01:5', 2),
+                (12, 'gone@example.com', '!', 'gone@example.com', 0)");
+            $db->exec("UPDATE users SET invitation_token = 'tok', token_expiry = '2026-12-01 00:00:00' WHERE id = 3");
+            $db->exec("UPDATE users SET locked_at = '2026-10-02 10:00:00', locked_by = 1 WHERE id = 4");
+            $db->exec("UPDATE users SET deleted_at = '2026-10-01 09:00:00', deleted_by = 1 WHERE id = 5");
+            // An account removed before soft deletion: its id must never come back
+            $db->exec("DELETE FROM users WHERE id = 12");
+            $db->exec("INSERT INTO groups (name) VALUES ('case-1 contributors')");
+            $db->exec("INSERT INTO user_group VALUES (1, 1), (2, 2), (4, 2)");
+            $db->exec("INSERT INTO directories (name, path, parent_id, created_by) VALUES ('case-1', '/case-1', 1, 1)");
+            $db->exec("INSERT INTO access_rights (group_id, directory_id, can_upload) VALUES (2, 2, 1)");
+            $db->exec("INSERT INTO files (directory_id, name, size, sha256, uploaded_by) VALUES (2, 'a.bin', 1, 'aa', 2), (2, 'b.bin', 1, 'bb', 5)");
+            $db->exec("INSERT INTO uploads (user_id, client_uuid, directory_id, name, size, chunk_size, chunk_count, staging_key, status)
+                       VALUES (2, 'c1', 2, 'c.bin', 10, 10, 1, 'k1', 'in_progress')");
+        });
+        $before = $old->query("SELECT " . self::V7_COLUMNS . " FROM users ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+        $old = null;
+
+        $db = $this->init('v7.sqlite');
+        $this->assertSame(8, self::scalar($db, 'PRAGMA user_version'));
+        $this->assertSame($before, $db->query("SELECT " . self::V7_COLUMNS . " FROM users ORDER BY id")->fetchAll(PDO::FETCH_ASSOC), 'every row and id kept');
+        $this->assertSame(['password'], $db->query("SELECT DISTINCT auth_source FROM users")->fetchAll(PDO::FETCH_COLUMN));
+        $this->assertSame(0, self::scalar($db, "SELECT COUNT(*) FROM users WHERE oidc_issuer IS NOT NULL OR oidc_subject IS NOT NULL
+                                                 OR display_name IS NOT NULL OR last_login_at IS NOT NULL"));
+        $this->assertSame([], Database::foreignKeyProblems($db));
+        $this->assertSame(3, self::scalar($db, 'SELECT COUNT(*) FROM user_group'));
+        $this->assertSame(2, self::scalar($db, 'SELECT COUNT(*) FROM files'));
+        $this->assertSame(1, self::scalar($db, 'SELECT COUNT(*) FROM uploads'));
+
+        // Same table as a fresh install
+        $fresh = $this->init('fresh.sqlite');
+        $this->assertSame($fresh->query("PRAGMA table_info(users)")->fetchAll(PDO::FETCH_ASSOC),
+            ($db = $this->init('v7.sqlite'))->query("PRAGMA table_info(users)")->fetchAll(PDO::FETCH_ASSOC));
+
+        // The AUTOINCREMENT counter is kept: id 12 is not reused
+        $db->exec("INSERT INTO users (username, password) VALUES ('new@example.com', 'x')");
+        $this->assertSame(13, (int)$db->lastInsertId());
+
+        // The other tables' foreign keys point to the new table, and are enforced
+        $db->exec("DELETE FROM users WHERE id = 4");
+        $this->assertSame(0, self::scalar($db, 'SELECT COUNT(*) FROM user_group WHERE user_id = 4'), 'ON DELETE CASCADE');
+        try {
+            $db->exec("INSERT INTO user_group VALUES (999, 1)");
+            $this->fail('membership of a missing user accepted');
+        } catch (\PDOException $e) {
+            $this->assertStringContainsString('FOREIGN KEY constraint failed', $e->getMessage());
+        }
+
+        // Running it again is a no-op
+        $again = $this->init('v7.sqlite');
+        $this->assertSame(8, self::scalar($again, 'PRAGMA user_version'));
+        $this->assertSame(5, self::scalar($again, 'SELECT COUNT(*) FROM users'), 'ids 1, 2, 3, 5 and 13');
+    }
+
+    public function testV8UsersConstraints(): void
+    {
+        $db = $this->init('v8.sqlite');
+        $db->exec("INSERT INTO users (username, password, auth_source, oidc_issuer, oidc_subject)
+                   VALUES ('alice@example.com', NULL, 'oidc', 'https://idp.example.com/', 'sub-1')");
+
+        $refused = [
+            'a password account without a password' => "INSERT INTO users (username, password) VALUES ('bob@example.org', NULL)",
+            'an unknown auth source' => "INSERT INTO users (username, password, auth_source) VALUES ('c@example.org', 'x', 'saml')",
+            'an issuer without a subject' => "INSERT INTO users (username, auth_source, oidc_issuer) VALUES ('d@example.com', 'oidc', 'https://idp.example.com/')",
+            'a subject without an issuer' => "INSERT INTO users (username, auth_source, oidc_subject) VALUES ('e@example.com', 'oidc', 'sub-2')",
+            'the same identity twice' => "INSERT INTO users (username, auth_source, oidc_issuer, oidc_subject)
+                                          VALUES ('f@example.com', 'oidc', 'https://idp.example.com/', 'sub-1')",
+        ];
+        foreach ($refused as $what => $sql) {
+            try {
+                $db->exec($sql);
+                $this->fail("accepted $what");
+            } catch (\PDOException $e) {
+                $this->assertMatchesRegularExpression('/CHECK constraint failed|UNIQUE constraint failed/', $e->getMessage(), $what);
+            }
+        }
+
+        // The same subject at another issuer is another identity; accounts without one don't collide
+        $db->exec("INSERT INTO users (username, auth_source, oidc_issuer, oidc_subject) VALUES ('g@example.com', 'oidc', 'https://other.example.com/', 'sub-1')");
+        $db->exec("INSERT INTO users (username, password) VALUES ('h@example.org', 'x'), ('i@example.org', 'y')");
+        $this->assertSame(4, self::scalar($db, 'SELECT COUNT(*) FROM users'));
     }
 
     public function testMigrationV2StopsOnDuplicateFiles(): void

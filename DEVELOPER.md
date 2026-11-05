@@ -323,7 +323,7 @@ Access rights :
 ### 1. **User Management**
 | Feature | Description | Location |
 |--------|-------------|-------------|
-| 🧑 View Users | List all users, their groups and their status: Active (has a password), Invited (no password yet; the tooltip says whether the link is pending or expired), Locked | Admin UI, Users tab |
+| 🧑 View Users | List all users, their groups and their status: Active (has a password, or signs in through the IdP), Invited (no password yet; the tooltip says whether the link is pending or expired), Locked | Admin UI, Users tab |
 | ➕ Create User | Not available: a contributor is created by inviting them. Administrators are created with `bin/create-admin.php` | — |
 | ✉️ Invite User | Into the current folder, never the root (D14; the Invite link is hidden there). Creates the account if needed and, unless "Add to the default group of this folder" is unticked, adds it to that folder's default group (created with upload access if missing). Always delivers a link to a page where the invitee sets their password (single use, one hour): by e-mail, or with `mail_engine=none` shown once in the dialog, with a Copy button, to pass on through another channel | File Manager UI (admins), Invite dialog |
 | 🔁 Resend Invitation | After a confirmation: a new link, to `/` (group memberships lead the user to their folders); never touches groups or rights. The previous link stops working and the account's open sessions end at once. The link sets a new password, so this is also how an administrator resets a forgotten one. With `mail_engine=none` the link is shown once in a dialog with a Copy button. Refused for locked accounts | Admin UI, Users tab |
@@ -421,6 +421,7 @@ Database initialization is handled programmatically in `src/Core/Database.php`.
 - **v5:** adds `users.session_version` (immediate revocation of sessions). Sessions opened before v5 match the default 0 and stay valid.
 - **v6:** adds `users.locked_at` / `locked_by`. A lock used to be recorded only as `password = '!'` with `token_expiry = 0`, which can't be told from an invitee whose link expired unused; those accounts get `locked_at` (the migration time, UTC) and lose any leftover token.
 - **v7:** adds `files.origin` (`upload` for every existing file), `files.integrity` and `files.checked_at` (refresh from storage). The `refresh_jobs` and `refresh_job_files` tables come from `createSchema()`.
+- **v8 (#9):** `users.password` becomes nullable (OIDC accounts have none), with `oidc_issuer`, `oidc_subject`, `auth_source`, `display_name` and `last_login_at`, and the unique index `users_oidc`. SQLite can't drop `NOT NULL` with `ALTER TABLE`, so the table is rebuilt (foreign keys off, in one transaction): every row and id is copied, the `AUTOINCREMENT` counter is kept, and the migration stops if the row count or the foreign-key problems change. Every existing account becomes `auth_source = 'password'`. It runs whether or not OIDC is configured. Code reading `password` must allow NULL: the login checks it's a string, the last-admin count counts OIDC admins, and Lock leaves an OIDC account's password NULL.
 
 To add a migration, add a `if ($version < N)` block in `migrate()` that ends with `PRAGMA user_version = N`. Back up the database file (`database_path`, by default `storage/database/app.sqlite`) before upgrading.
 
@@ -445,7 +446,7 @@ Database structure is :
 CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
-    password TEXT NOT NULL,
+    password TEXT,               -- a hash, '!' (none set, or locked), or NULL for an OIDC account
     email TEXT UNIQUE,
     invitation_token TEXT,
     token_expiry DATETIME,
@@ -453,8 +454,16 @@ CREATE TABLE users (
     deleted_by INTEGER,
     session_version INTEGER NOT NULL DEFAULT 0, -- incremented to end the account's sessions
     locked_at DATETIME,             -- UTC; set by Lock, cleared by Unlock
-    locked_by INTEGER
+    locked_by INTEGER,
+    oidc_issuer TEXT,            -- the OIDC identity (#9): both set, or both NULL
+    oidc_subject TEXT,
+    auth_source TEXT NOT NULL DEFAULT 'password' CHECK (auth_source IN ('password', 'oidc')),
+    display_name TEXT,           -- the IdP's name for the account
+    last_login_at DATETIME,
+    CHECK (password IS NOT NULL OR auth_source = 'oidc'),
+    CHECK ((oidc_issuer IS NULL) = (oidc_subject IS NULL))
 );
+CREATE UNIQUE INDEX users_oidc ON users(oidc_issuer, oidc_subject);
 CREATE TABLE IF NOT EXISTS 'groups' (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,

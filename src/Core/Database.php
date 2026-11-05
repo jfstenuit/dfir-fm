@@ -7,7 +7,40 @@ use Exception;
 
 class Database
 {
+    /** The schema version this code migrates to (PRAGMA user_version) */
+    public const SCHEMA_VERSION = 8;
+
     private static $connection;
+
+    /**
+     * The users table (v8). password is NULL only for OIDC accounts, which
+     * have none (#9); an OIDC identity is (oidc_issuer, oidc_subject), both
+     * set or both NULL.
+     */
+    private const USERS_COLUMNS = "
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password TEXT,
+    email TEXT UNIQUE,
+    invitation_token TEXT,
+    token_expiry DATETIME,
+    deleted_at DATETIME,
+    deleted_by INTEGER,
+    session_version INTEGER NOT NULL DEFAULT 0,
+    locked_at DATETIME,
+    locked_by INTEGER,
+    oidc_issuer TEXT,
+    oidc_subject TEXT,
+    auth_source TEXT NOT NULL DEFAULT 'password' CHECK (auth_source IN ('password', 'oidc')),
+    display_name TEXT,
+    last_login_at DATETIME,
+    CHECK (password IS NOT NULL OR auth_source = 'oidc'),
+    CHECK ((oidc_issuer IS NULL) = (oidc_subject IS NULL))
+            ";
+
+    /** Columns of the users table before v8, copied by the rebuild */
+    private const USERS_V7_COLUMNS = 'id, username, password, email, invitation_token, token_expiry, deleted_at, deleted_by,
+                                      session_version, locked_at, locked_by';
 
     public static function initialize($dbPath)
     {
@@ -66,19 +99,7 @@ class Database
     private static function createSchema()
     {
         $queries = [
-            "CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE,
-    password TEXT NOT NULL,
-    email TEXT UNIQUE,
-    invitation_token TEXT,
-    token_expiry DATETIME,
-    deleted_at DATETIME,
-    deleted_by INTEGER,
-    session_version INTEGER NOT NULL DEFAULT 0,
-    locked_at DATETIME,
-    locked_by INTEGER
-            );",
+            "CREATE TABLE IF NOT EXISTS users (" . self::USERS_COLUMNS . ");",
 
             "CREATE TABLE IF NOT EXISTS groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -236,6 +257,7 @@ class Database
             // default password 'admin'.
             $stmt = self::$connection->query("SELECT id, password FROM users WHERE username = 'admin'");
             $seeded = $stmt->fetch(PDO::FETCH_ASSOC);
+            $stmt->closeCursor(); // an open cursor on users would block v8's table rebuild
             if ($seeded && $seeded['password'] !== '!' && password_verify('admin', $seeded['password'])) {
                 $lock = self::$connection->prepare("UPDATE users SET password = '!', invitation_token = NULL, token_expiry = NULL WHERE id = :id");
                 $lock->execute([':id' => $seeded['id']]);
@@ -268,6 +290,58 @@ class Database
 
         if ($version < 7) {
             self::migrateToV7();
+        }
+
+        if ($version < 8) {
+            self::migrateToV8();
+        }
+    }
+
+    /**
+     * v8 (Phase 16, OIDC sign-in, #9): users.password nullable (OIDC
+     * accounts have none), and oidc_issuer, oidc_subject, auth_source,
+     * display_name, last_login_at. SQLite can't drop NOT NULL with ALTER
+     * TABLE, so the table is rebuilt: every row and id is copied, and the
+     * AUTOINCREMENT counter kept (ids of accounts removed before v3 are
+     * never reused). Every existing account is auth_source 'password'.
+     * Runs whether or not OIDC is configured.
+     */
+    private static function migrateToV8()
+    {
+        $db = self::$connection;
+        // Off already (enforced after the migrations), and a no-op inside a
+        // transaction: dropping the old table must not cascade to anything
+        $db->exec("PRAGMA foreign_keys = OFF");
+        $db->exec("BEGIN IMMEDIATE");
+        try {
+            if ((int)$db->query("PRAGMA user_version")->fetchColumn() >= 8) {
+                $db->exec("COMMIT"); // another request migrated meanwhile
+                return;
+            }
+            if (!self::hasColumn('users', 'auth_source')) {
+                $problemsBefore = count(self::foreignKeyProblems());
+                $sequence = $db->query("SELECT seq FROM sqlite_sequence WHERE name = 'users'")->fetchColumn();
+                $count = (int)$db->query("SELECT COUNT(*) FROM users")->fetchColumn();
+
+                $db->exec("CREATE TABLE users_v8 (" . self::USERS_COLUMNS . ")");
+                $db->exec("INSERT INTO users_v8 (" . self::USERS_V7_COLUMNS . ") SELECT " . self::USERS_V7_COLUMNS . " FROM users");
+                $db->exec("DROP TABLE users");
+                $db->exec("ALTER TABLE users_v8 RENAME TO users");
+                if ($sequence !== false) {
+                    $db->prepare("UPDATE sqlite_sequence SET seq = MAX(seq, :seq) WHERE name = 'users'")->execute([':seq' => (int)$sequence]);
+                }
+
+                if ((int)$db->query("SELECT COUNT(*) FROM users")->fetchColumn() !== $count
+                    || count(self::foreignKeyProblems()) !== $problemsBefore) {
+                    throw new Exception('Migration v8 stopped: the users table rebuild lost rows or references');
+                }
+            }
+            $db->exec("CREATE UNIQUE INDEX IF NOT EXISTS users_oidc ON users(oidc_issuer, oidc_subject)");
+            $db->exec("PRAGMA user_version = 8");
+            $db->exec("COMMIT");
+        } catch (\Throwable $e) {
+            $db->exec("ROLLBACK");
+            throw $e;
         }
     }
 

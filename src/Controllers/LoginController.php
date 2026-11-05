@@ -263,7 +263,8 @@ class LoginController
         $stmt->execute();
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
-        if ($user && password_verify($password, $user['password'])) {
+        // OIDC accounts have no password (NULL)
+        if ($user && is_string($user['password']) && password_verify($password, $user['password'])) {
             // Only the username counter is reset. Resetting the IP counter
             // would let an attacker with one valid account clear it between
             // guesses on other accounts.
