@@ -169,7 +169,16 @@ With OIDC configured, every address of `oidc_email_domain` signs in through the 
    Some IdPs, Authentik among them, refuse the *client* (`invalid_client`) when the client id or the redirect URI is wrong too. When the authorization request fails as well, fix those first.
 
    Every run is logged as `cli_oidc_check`.
-4. **Sign in with a real account** of the domain on the login page. A refused sign-in shows "Sign-in was not permitted" with a reference: the `login_oidc_failure` entry with that `correlation_id` gives the cause. After a sign-in, the browser remembers the address in the `dfirfm_login_email` cookie (the address only; `oidc_remember_days`), and the login page then goes straight to the IdP, except after a logout or a failed sign-in, where it offers "Sign in with …" or "Use a different e-mail". Logging out of DFIR FM also logs out of the IdP when it advertises an `end_session_endpoint`; the IdP then sends the browser back to `https://<your site>/login?signed_out`, which some IdPs require registering as a post-logout redirect URI. Accounts signed in through the IdP have no password in DFIR FM, so they get no "Change Password". If the IdP's certificate comes from an internal CA, set `oidc_ca_file` to that CA's PEM file: it then replaces the system CA store for IdP calls.
+4. **Keep a break-glass administrator outside the domain.** An address of the domain can't sign in with a password, so `bin/create-admin.php` refuses it: create the first administrator, and keep one, with an address outside the domain. It is how you get in when the IdP is down or misconfigured. The Users tab warns when none is left.
+5. **Sign in with a real account** of the domain on the login page. A refused sign-in shows "Sign-in was not permitted" with a reference: the `login_oidc_failure` entry with that `correlation_id` gives the cause. After a sign-in, the browser remembers the address in the `dfirfm_login_email` cookie (the address only; `oidc_remember_days`), and the login page then goes straight to the IdP, except after a logout or a failed sign-in, where it offers "Sign in with …" or "Use a different e-mail". Logging out of DFIR FM also logs out of the IdP when it advertises an `end_session_endpoint`; the IdP then sends the browser back to `https://<your site>/login?signed_out`, which some IdPs require registering as a post-logout redirect URI. Accounts signed in through the IdP have no password in DFIR FM, so they get no "Change Password". If the IdP's certificate comes from an internal CA, set `oidc_ca_file` to that CA's PEM file: it then replaces the system CA store for IdP calls.
+
+**Accounts and identities.** At its first sign-in, an identity (the IdP's issuer and `sub`) is linked to the account of its address, or gets a new account. When the IdP changes a user's `sub` (an account re-created at the IdP, a migration to another IdP), the sign-in is refused (`subject_conflict`) rather than given to the account of the address. After checking, relink it on the server:
+```bash
+sudo -u www-data php bin/oidc-accounts.php list
+sudo -u www-data php bin/oidc-accounts.php relink alice@yourdomain.com --subject <the new sub>   # --issuer for another IdP
+sudo -u www-data php bin/oidc-accounts.php unlink alice@yourdomain.com   # or: linked again by address at the next sign-in
+```
+The new `sub` is in the refused sign-in's `login_oidc_failure` entry (`detail`). Every run is logged as `cli_oidc_account`.
 
 **Authentik:**
 - The issuer is per application, `https://<host>/application/o/<slug>/`, trailing slash included.

@@ -133,6 +133,12 @@ final class AccountResolverTest extends TestCase
     {
         $id = $this->addLocal('alice@example.com', null, ['auth_source' => 'oidc', 'oidc_issuer' => self::ISS, 'oidc_subject' => 'sub-old']);
         $this->assertRefused('subject_conflict');
+        try {
+            $this->resolve();
+        } catch (OidcRefusal $e) {
+            // What bin/oidc-accounts.php relink needs, in the log's detail
+            $this->assertStringContainsString('refused: issuer ' . self::ISS . ' subject sub-alice', $e->getMessage());
+        }
         // Same subject, another issuer (an IdP migration): another identity, refused too
         $this->db->exec("UPDATE users SET oidc_subject = 'sub-alice', oidc_issuer = 'https://old-idp.example.com/' WHERE id = $id");
         $this->assertRefused('subject_conflict');

@@ -102,7 +102,8 @@ final class AccountResolver
             $user = $matches[0];
             self::refuseLocked($user);
             if ($user['oidc_subject'] !== null) {
-                throw new OidcRefusal('subject_conflict', "The account $email is linked to another IdP identity");
+                // The refused identity, for bin/oidc-accounts.php relink
+                throw new OidcRefusal('subject_conflict', "The account $email is linked to another IdP identity; refused: issuer {$identity['iss']} subject {$identity['sub']}");
             }
             // D33: the IdP is authoritative for the domain. The password and
             // a pending invitation go, the rights stay; open sessions end.

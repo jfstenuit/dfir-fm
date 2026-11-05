@@ -9,6 +9,9 @@
 //
 // Also the break-glass tool: it works without the web interface and without
 // any identity provider, so it can restore access when every admin is locked out.
+// With OIDC enabled, the username must be outside oidc_email_domain: an
+// in-domain address signs in through the IdP only (D35). An existing OIDC
+// account it resets becomes a password account (its IdP identity is cleared).
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
@@ -26,6 +29,7 @@ use Core\Database;
 use Backends\LogEngineFactory;
 use Backends\LogWriteException;
 use Middleware\AccessMiddleware;
+use Services\Oidc\OidcConfig;
 
 if ($argc !== 2 || $argv[1] === '' || str_starts_with($argv[1], '-')) {
     fwrite(STDERR, "Usage: php bin/create-admin.php <username>\n");
@@ -46,6 +50,14 @@ App::setConfig($config);
 App::setDb($db);
 App::setLogger($logger);
 
+$oidc = OidcConfig::fromConfig($config);
+if ($oidc->inDomain($username)) {
+    fwrite(STDERR, "'$username' is in the OIDC domain {$oidc->emailDomain()}: it signs in through the identity provider, never with a password,
+"
+        . "so it can't be a break-glass administrator. Use an address outside the domain. Its admin rights come from the IdP's admin claim.\n");
+    exit(2);
+}
+
 $osUser = function_exists('posix_geteuid') ? (posix_getpwuid(posix_geteuid())['name'] ?? (string)posix_geteuid()) : get_current_user();
 
 $adminGroupId = $db->query("SELECT id FROM groups WHERE is_admin = 1 ORDER BY id LIMIT 1")->fetchColumn();
@@ -60,14 +72,19 @@ $hash = password_hash($password, PASSWORD_DEFAULT);
 
 $db->beginTransaction();
 
-$stmt = $db->prepare("SELECT id FROM users WHERE username = :username");
+$stmt = $db->prepare("SELECT id, auth_source FROM users WHERE username = :username");
 $stmt->execute([':username' => $username]);
-$userId = $stmt->fetchColumn();
+$existing = $stmt->fetch(PDO::FETCH_ASSOC);
+$userId = $existing['id'] ?? false;
+$fromOidc = ($existing['auth_source'] ?? null) === 'oidc';
 
 if ($userId) {
-    // A reset ends the account's open sessions, and lifts a lock (break-glass)
+    // A reset ends the account's open sessions, and lifts a lock (break-glass).
+    // An OIDC account outside the domain (OIDC disabled, or the domain
+    // changed) becomes a password account: the login refuses a password otherwise.
     $stmt = $db->prepare("UPDATE users SET password = :password, invitation_token = NULL, token_expiry = NULL, session_version = session_version + 1,
-                                           locked_at = NULL, locked_by = NULL WHERE id = :id");
+                                           locked_at = NULL, locked_by = NULL, auth_source = 'password', oidc_issuer = NULL, oidc_subject = NULL
+                          WHERE id = :id");
     $stmt->execute([':password' => $hash, ':id' => $userId]);
     $created = false;
 } else {
@@ -85,6 +102,7 @@ $db->commit();
 $logger->log('cli_admin_created', [
     'target_user' => $username,
     'new_account' => $created,
+    'converted_from_oidc' => $fromOidc,
     'username' => 'cli:' . $osUser,
 ]);
 
