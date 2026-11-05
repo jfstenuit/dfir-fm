@@ -308,6 +308,46 @@ final class OidcLoginTest extends FeatureTestCase
         $this->assertSame('https://dfirfm.test/login?signed_out', $this->idp->endSession($location)['location']);
     }
 
+    /**
+     * prompt=login when the IdP may still have the previous user's session
+     * (an IdP that keeps it would sign them in again), not after the IdP's
+     * own logout (authentik would then ask twice)
+     */
+    public function testReauthentication(): void
+    {
+        $this->restartWith($this->idp->env(['max_login_attempts' => '20'])); // over 10 sign-ins started
+        $prompt = function (HttpClient $client): ?string {
+            parse_str((string)parse_url($this->start($client), PHP_URL_QUERY), $params);
+            return $params['prompt'] ?? null;
+        };
+        $this->assertNull($prompt($this->client()), 'a first sign-in uses the IdP session (SSO)');
+
+        $cases = [
+            'back from the IdP logout' => [['login?signed_out'], null],
+            'then another e-mail' => [['login?signed_out', 'login?other'], null],
+            'local-only logout' => [['login?signed_out=local'], 'login'],
+            'another e-mail, no logout' => [['login?other'], 'login'],
+        ];
+        foreach ($cases as $case => [$pages, $expected]) {
+            $client = $this->client();
+            foreach ($pages as $page) {
+                $this->assertSame(200, $client->get($page)->status, $page);
+            }
+            $this->assertSame($expected, $prompt($client), $case);
+            $this->assertNull($prompt($client), "$case: once");
+        }
+        $this->assertSame([false, false, false, false, false, true, false, true, false],
+            array_column($this->server->logEntries('login_oidc_start'), 'reauthenticate'));
+
+        // The whole round: sign in, log out at the IdP, back to the signed-out page, sign in
+        $client = $this->client();
+        $this->signIn($client, 'sub-carol', self::claims(self::CAROL));
+        $logout = $client->get('logout')->header('location');
+        $this->assertSame('https://dfirfm.test/login?signed_out', $this->idp->endSession($logout)['location']);
+        $client->get('login?signed_out');
+        $this->assertNull($prompt($client));
+    }
+
     public function testPasswordLogoutUnchanged(): void
     {
         $response = $this->bobClient()->get('logout');

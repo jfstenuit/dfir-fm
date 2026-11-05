@@ -4,8 +4,14 @@ namespace Views;
 
 class LoginView
 {
-    public static function render($redirect)
+    /**
+     * The e-mail step, then the password or (with OIDC, an in-domain
+     * address) the redirect to the IdP
+     * @param ?string $ssoName oidc_display_name, null while OIDC is disabled
+     */
+    public static function render($redirect, ?string $ssoName = null)
     {
+        $e = fn(string $value) => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -32,16 +38,41 @@ class LoginView
         <button type="submit" class="btn" id="loginBtn" disabled>Login</button>
     </form>
 
-    <!-- Step 3: Optional OIDC -->
+<?php if ($ssoName !== null): ?>
+    <!-- Step 2, an in-domain address: on to the IdP (login.js) -->
     <div id="step-oidc" class="d-none">
-        <button class="btn" id="oidcBtn">Login with SSO</button>
+        <p>Redirecting to <?= $e($ssoName) ?>…</p>
     </div>
+<?php endif; ?>
 
     <!-- Redirect info -->
-    <input type="hidden" id="redirect" value="<?php echo htmlspecialchars($redirect, ENT_QUOTES, 'UTF-8'); ?>">
+    <input type="hidden" id="redirect" value="<?php echo $e($redirect); ?>">
     <div id="loginMessage"></div>
 </div>
 
+</body>
+</html>
+<?php
+    }
+
+    /**
+     * After a logout (?signed_out) or a failed OIDC sign-in: no automatic
+     * redirect to the IdP, the user chooses
+     */
+    public static function renderChoice(string $redirect, string $ssoName, string $signInUrl, bool $signedOut): void
+    {
+        $e = fn(string $value) => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+        $other = 'login?' . http_build_query(['other' => ''] + ($redirect !== '' ? ['redirect' => $redirect] : []));
+?>
+<!DOCTYPE html>
+<html lang="en">
+<?php Layout::head($signedOut ? 'Signed out' : 'Login', [Layout::BOOTSTRAP_CSS, 'assets/css/login.css']); ?>
+<body class="login">
+<div class="login-container">
+    <h2><?= $signedOut ? 'Signed out' : 'Please authenticate' ?></h2>
+    <a class="btn" id="oidcBtn" href="<?= $e($signInUrl) ?>">Sign in with <?= $e($ssoName) ?></a>
+    <p class="mt-3"><a id="otherEmail" href="<?= $e($other) ?>">Use a different e-mail</a></p>
+</div>
 </body>
 </html>
 <?php

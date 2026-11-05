@@ -58,7 +58,8 @@ class LogoutController
         Session::logout();
 
         if ($endpoint === null) {
-            header('Location: ' . Request::getBasePath() . '/login?signed_out');
+            // The IdP may still have its session: the next sign-in asks it to re-authenticate
+            header('Location: ' . Request::getBasePath() . '/login?signed_out=local');
             exit;
         }
         $query = http_build_query([

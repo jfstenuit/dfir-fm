@@ -68,8 +68,13 @@ class OidcController
         $hint = $oidc->inDomain($hint) && filter_var($hint, FILTER_VALIDATE_EMAIL) !== false ? $hint : null;
         $redirect = LoginController::sanitizeRedirect(is_string($_GET['redirect'] ?? null) ? $_GET['redirect'] : '');
 
+        // Set by the login page after a local-only logout or "Use a different
+        // e-mail": an IdP that kept its session must not sign the previous
+        // user in again
+        $reauthenticate = !empty($_SESSION['oidc_reauthenticate']);
+        unset($_SESSION['oidc_reauthenticate'], $_SESSION['oidc_idp_signed_out']);
         try {
-            [$url, $pending] = $flow->start($hint);
+            [$url, $pending] = $flow->start($hint, $reauthenticate);
         } catch (OidcException $e) {
             self::fail($oidc, 'provider', $e->getMessage());
             return;
@@ -78,7 +83,7 @@ class OidcController
         CodeFlow::remember($store, $pending, $redirect);
         $_SESSION['oidc_pending'] = $store;
 
-        App::getLogger()->log('login_oidc_start', ['login_hint' => $hint]);
+        App::getLogger()->log('login_oidc_start', ['login_hint' => $hint, 'reauthenticate' => $reauthenticate]);
         header("Location: $url", true, 302);
     }
 
@@ -122,6 +127,8 @@ class OidcController
     {
         $correlationId = bin2hex(random_bytes(8));
         App::getLogger()->log('login_oidc_failure', ['cause' => $cause, 'correlation_id' => $correlationId, 'detail' => $detail]);
+        // The login page doesn't send this session back to the IdP by itself (no loop)
+        $_SESSION['oidc_failed'] = true;
         http_response_code($cause === 'provider' ? 502 : 403);
         OidcFailureView::render($correlationId, $oidc->displayName());
     }
@@ -129,13 +136,41 @@ class OidcController
     /** Secure under the session cookie's rule; HttpOnly; Lax, so the IdP's redirect back carries it */
     private static function rememberEmail(OidcConfig $oidc, string $email): void
     {
-        setcookie(self::EMAIL_COOKIE, $email, [
-            'expires' => time() + $oidc->rememberDays() * 86400,
+        setcookie(self::EMAIL_COOKIE, $email, self::cookieOptions(time() + $oidc->rememberDays() * 86400));
+    }
+
+    /**
+     * The remembered login e-mail, when it's a valid in-domain address.
+     * Anything else (another domain, malformed, OIDC disabled) is cleared.
+     */
+    public static function rememberedEmail(OidcConfig $oidc): ?string
+    {
+        $cookie = $_COOKIE[self::EMAIL_COOKIE] ?? null;
+        if ($cookie === null) {
+            return null;
+        }
+        if (is_string($cookie) && $oidc->inDomain($cookie) && filter_var($cookie, FILTER_VALIDATE_EMAIL) !== false) {
+            return $cookie;
+        }
+        self::forgetEmail();
+        return null;
+    }
+
+    public static function forgetEmail(): void
+    {
+        setcookie(self::EMAIL_COOKIE, '', self::cookieOptions(1));
+        unset($_COOKIE[self::EMAIL_COOKIE]);
+    }
+
+    private static function cookieOptions(int $expires): array
+    {
+        return [
+            'expires' => $expires,
             'path' => Request::getBasePath() . '/',
             'secure' => Request::isHttps(),
             'httponly' => true,
             'samesite' => 'Lax',
-        ]);
+        ];
     }
 
     /** amr for the log: a list of strings, or null */

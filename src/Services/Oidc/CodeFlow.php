@@ -28,10 +28,12 @@ final class CodeFlow
 
     /**
      * @param ?string $loginHint an in-domain address, passed on to the IdP
+     * @param bool $reauthenticate prompt=login: the IdP asks for the credentials
+     *   even if it has a session (after a logout, or to use another account)
      * @return array{0:string,1:array{state:string,nonce:string,verifier:string}} the authorization URL, and the one-time values
      * @throws OidcException discovery failed
      */
-    public function start(?string $loginHint): array
+    public function start(?string $loginHint, bool $reauthenticate = false): array
     {
         $endpoint = $this->provider->metadata()['authorization_endpoint'];
         $pending = ['state' => self::random(32), 'nonce' => self::random(32), 'verifier' => self::random(48)];
@@ -47,6 +49,9 @@ final class CodeFlow
         ];
         if ($loginHint !== null) {
             $params['login_hint'] = $loginHint;
+        }
+        if ($reauthenticate) {
+            $params['prompt'] = 'login';
         }
         if ($this->config->maxAge() !== null) {
             $params['max_age'] = $this->config->maxAge();

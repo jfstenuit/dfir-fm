@@ -9,6 +9,7 @@ use Core\Request;
 use Core\Session;
 use Core\App;
 use Middleware\SecurityMiddleware;
+use Services\Oidc\OidcConfig;
 use Views\LoginView;
 use Views\SetPasswordView;
 
@@ -27,8 +28,8 @@ class LoginController
             }
 
             // Case B : standard login form
-            $redirect = isset($_GET['redirect']) ? filter_var($_GET['redirect'], FILTER_SANITIZE_URL) : '';
-            LoginView::render($redirect);
+            $redirect = is_string($_GET['redirect'] ?? null) ? filter_var($_GET['redirect'], FILTER_SANITIZE_URL) : '';
+            self::showLogin(OidcConfig::fromConfig($config), $redirect);
         } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Case C : process submited login form
             $action = $_POST['action'] ?? null;
@@ -43,6 +44,71 @@ class LoginController
             http_response_code(405); // Method Not Allowed
             echo "Method Not Allowed";
         }
+    }
+
+    /**
+     * The login page (D32). A remembered in-domain e-mail goes straight to
+     * the IdP, except after a logout (?signed_out) or a failed OIDC
+     * sign-in in this session, which get the choice between the IdP and
+     * another e-mail instead: without that, the IdP's own session would
+     * sign the user back in, or a failure would loop. ?other forgets the
+     * e-mail.
+     */
+    private static function showLogin(OidcConfig $oidc, string $redirect): void
+    {
+        if (!$oidc->isEnabled()) {
+            if (isset($_COOKIE[OidcController::EMAIL_COOKIE])) {
+                OidcController::forgetEmail();
+            }
+            LoginView::render($redirect);
+            return;
+        }
+
+        $failed = !empty($_SESSION['oidc_failed']);
+        unset($_SESSION['oidc_failed']);
+        if (isset($_GET['other'])) {
+            // Another account: the IdP must ask for it, unless this browser
+            // has just ended its IdP session (authentik would then ask twice:
+            // once for the missing session, once more for prompt=login)
+            if (empty($_SESSION['oidc_idp_signed_out'])) {
+                $_SESSION['oidc_reauthenticate'] = true;
+            }
+            if (isset($_COOKIE[OidcController::EMAIL_COOKIE])) {
+                OidcController::forgetEmail();
+            }
+            LoginView::render($redirect, $oidc->displayName());
+            return;
+        }
+
+        $email = OidcController::rememberedEmail($oidc);
+        $signedOut = isset($_GET['signed_out']);
+        $query = http_build_query(array_filter(['login_hint' => $email, 'redirect' => $redirect]));
+        $signIn = Request::getBasePath() . '/login/oidc' . ($query !== '' ? "?$query" : '');
+        if ($email !== null && !$signedOut && !$failed) {
+            header("Location: $signIn", true, 302);
+            return;
+        }
+        if ($signedOut || $failed) {
+            // Back from the IdP's logout, its session has ended; after a
+            // local-only logout (?signed_out=local) it may still be there
+            if ($signedOut && $_GET['signed_out'] === 'local') {
+                $_SESSION['oidc_reauthenticate'] = true;
+            } elseif ($signedOut) {
+                $_SESSION['oidc_idp_signed_out'] = true;
+            }
+            LoginView::renderChoice($redirect, $oidc->displayName(), $signIn, $signedOut);
+            return;
+        }
+        LoginView::render($redirect, $oidc->displayName());
+    }
+
+    /** Password sign-in refused for an address of oidc_email_domain or an OIDC account (#9) */
+    private static function refusesPassword(string $username, ?array $user): ?string
+    {
+        if (OidcConfig::fromConfig(App::getConfig())->inDomain($username)) {
+            return 'domain';
+        }
+        return ($user['auth_source'] ?? null) === 'oidc' ? 'oidc_account' : null;
     }
 
     private const INVALID_LINK = 'This invitation link is not valid: it was already used, has expired (links are valid for one hour), or was replaced by a newer one. Ask the person who invited you for a new invitation.';
@@ -82,6 +148,13 @@ class LoginController
         return [$user, null];
     }
 
+    /** An invitation link for an address that signs in through the IdP */
+    private static function oidcAddress(): string
+    {
+        $name = OidcConfig::fromConfig(App::getConfig())->displayName();
+        return "This address signs in through $name, not with a password: sign in from the login page.";
+    }
+
     /** Headers of the invitation page and answers: the URL holds the token */
     private static function invitationHeaders(): void
     {
@@ -96,6 +169,12 @@ class LoginController
         $token = trim(self::field($_GET, 'token'));
         $directory = trim(self::field($_GET, 'directory')) ?: '/';
 
+        if (self::refusesPassword($email, null) !== null) {
+            App::getLogger()->log('login_password_refused_oidc', ['cause' => 'domain', 'target_user' => $email, 'step' => 'link']);
+            http_response_code(400);
+            SetPasswordView::render($email, '', $directory, self::oidcAddress());
+            return;
+        }
         [$user, $cause] = self::checkInvitation($db, $email, $token);
         if ($user === null) {
             App::getLogger()->log('login_token_failure', ['cause' => $cause, 'target_user' => $email, 'step' => 'link']);
@@ -120,6 +199,11 @@ class LoginController
         $directory = trim(self::field($_POST, 'directory')) ?: '/';
         $password = $_POST['password'] ?? null;   // never trimmed
 
+        if (self::refusesPassword($email, null) !== null) {
+            App::getLogger()->log('login_password_refused_oidc', ['cause' => 'domain', 'target_user' => $email, 'step' => 'invitation']);
+            echo json_encode(['success' => false, 'message' => self::oidcAddress()]);
+            return;
+        }
         [$user, $cause] = self::checkInvitation($db, $email, $token);
         if ($user === null) {
             App::getLogger()->log('login_token_failure', ['cause' => $cause, 'target_user' => $email, 'step' => 'password']);
@@ -186,9 +270,12 @@ class LoginController
         $stmt->bindParam(':email', $email, PDO::PARAM_STR);
         $stmt->execute();
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-        // In the future, implement logic for known OIDC-based users
-        echo json_encode(['login_type' => 'password']);
+
+        // The domain decides (D31), not the account: the answer says
+        // nothing about which accounts exist
+        $oidc = OidcConfig::fromConfig(App::getConfig());
+        $isOidc = $oidc->inDomain($email) && filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
+        echo json_encode(['login_type' => $isOidc ? 'oidc' : 'password']);
     }
     
     public static function sanitizeRedirect($redirect)
@@ -258,10 +345,19 @@ class LoginController
             return;
         }
 
-        $stmt = $db->prepare("SELECT id as user_id, password, username, session_version FROM users WHERE username = :username AND deleted_at IS NULL AND locked_at IS NULL");
+        $stmt = $db->prepare("SELECT id as user_id, password, username, session_version, auth_source FROM users WHERE username = :username AND deleted_at IS NULL AND locked_at IS NULL");
         $stmt->bindParam(':username', $username, PDO::PARAM_STR);
         $stmt->execute();
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // In the domain, or linked to the IdP: the IdP only, whatever the
+        // password (an account not linked yet may still have one). The
+        // same answer as a wrong password.
+        if (($refused = self::refusesPassword($username, $user ?: null)) !== null) {
+            App::getLogger()->log('login_password_refused_oidc', ['cause' => $refused, 'target_user' => $username]);
+            echo json_encode(['success' => false, 'message' => 'Invalid username or password.']);
+            return;
+        }
     
         // OIDC accounts have no password (NULL)
         if ($user && is_string($user['password']) && password_verify($password, $user['password'])) {

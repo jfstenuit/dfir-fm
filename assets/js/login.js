@@ -1,4 +1,5 @@
-// assets/js/login.js - Two-step login: email, then password
+// assets/js/login.js - Two-step login: email, then password, or the
+// identity provider for an address of the OIDC domain (#9)
 //
 // An expired session or CSRF token makes api() reload the page (a fresh
 // token); nothing else to do here for that case.
@@ -11,6 +12,7 @@ const SLIDES = ['slide-in-left', 'slide-in-right', 'slide-out-left', 'slide-out-
 const byId = id => document.getElementById(id);
 const stepLogin = byId('step-login');
 const stepPassword = byId('step-password');
+const stepOidc = byId('step-oidc');       // only with OIDC enabled
 const username = byId('username');
 const password = byId('password');
 const nextBtn = byId('nextBtn');
@@ -37,7 +39,8 @@ function setPasswordStepEnabled(enabled) {
     loginBtn.disabled = !enabled;
 }
 
-// Step 1: the email. The answer doesn't say whether the account exists.
+// Step 1: the email. The answer depends on its domain only, not on
+// whether the account exists.
 stepLogin.addEventListener('submit', async event => {
     event.preventDefault();
     say('');
@@ -49,8 +52,16 @@ stepLogin.addEventListener('submit', async event => {
 
     nextBtn.disabled = true;
     try {
-        // login_type is always "password" for now (OIDC: #9, PLAN.md Phase 16)
-        await api('login', { data: { action: 'checkUser', email } });
+        const answer = await api('login', { data: { action: 'checkUser', email } });
+        if (answer?.login_type === 'oidc' && stepOidc) {
+            await slide(stepLogin, stepOidc, 'forward');
+            const query = new URLSearchParams({ login_hint: email });
+            if (byId('redirect').value) {
+                query.set('redirect', byId('redirect').value);
+            }
+            window.location.href = 'login/oidc?' + query;
+            return;
+        }
         await slide(stepLogin, stepPassword, 'forward');
         password.focus();
     } catch (error) {
@@ -97,10 +108,6 @@ stepPassword.addEventListener('submit', async event => {
         return;
     }
     window.location.href = result.redirect || '.';
-});
-
-byId('oidcBtn')?.addEventListener('click', () => {
-    window.location.href = 'login/oidc';
 });
 
 // Ready: the buttons are rendered disabled so that nothing submits natively before this point

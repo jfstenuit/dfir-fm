@@ -100,7 +100,12 @@ final class CodeFlowTest extends TestCase
         parse_str(parse_url($other, PHP_URL_QUERY), $params);
         $this->assertArrayNotHasKey('login_hint', $params);
         $this->assertArrayNotHasKey('max_age', $params);
+        $this->assertArrayNotHasKey('prompt', $params);
         $this->assertNotSame($pending['state'], $params['state']);
+
+        [$again] = $this->flow()->start('alice@example.com', reauthenticate: true);
+        parse_str(parse_url($again, PHP_URL_QUERY), $params);
+        $this->assertSame('login', $params['prompt']);
     }
 
     public function testFinish(): void
