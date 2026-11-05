@@ -1,8 +1,8 @@
-// assets/js/filemanager.js - The file manager page: listing, folders, uploads,
-// access rights, invitations, password change, refresh from storage
+// assets/js/filemanager.js - The file manager page: listing, folders, rename,
+// uploads, access rights, invitations, password change, refresh from storage
 
 import Dropzone from '../../vendor/enyo/dropzone/dist/dropzone.mjs';
-import { api, h, icon, on, hideModal, showResultMessage, updatePassword, groupAutocomplete, copyField } from './utils.js';
+import { api, h, icon, on, showModal, hideModal, showResultMessage, updatePassword, groupAutocomplete, copyField } from './utils.js';
 import { sortableTable } from './sortable-table.js';
 
 const byId = id => document.getElementById(id);
@@ -45,6 +45,11 @@ export function init() {
     });
     byId('confirmDeleteButton')?.addEventListener('click', deleteItem);
 
+    on('#main-table', 'click', '.rename-action', (event, link) => {
+        event.preventDefault();
+        openRename(link.closest('.inline-actions'));
+    });
+
     // Access rights dialog
     byId('accessRightsModal')?.addEventListener('show.bs.modal', loadAccessRights);
     groupAutocomplete('#groupNameInput');
@@ -72,9 +77,11 @@ function itemRow(item) {
         h('td', {}, item.by, h('br'), item.from),
         h('td', { class: 'checksum', title: item.sha256 || null }, item.sha256 ?? ''),
         h('td', { class: 'inline-actions text-center', dataset: { id: item.id, type: item.type, name: item.name } },
-            canDelete ? h('a', { href: '#', class: 'delete-action', title: 'Delete', 'data-bs-toggle': 'modal', 'data-bs-target': '#deleteConfirmModal' }, icon('trash')) : null,
-            ' ',
-            h('a', { title: 'Rename', href: '#' }, icon('pencil-square'))));
+            // Rename needs the same right as delete (#21)
+            canDelete ? [
+                h('a', { href: '#', class: 'delete-action', title: 'Delete', 'data-bs-toggle': 'modal', 'data-bs-target': '#deleteConfirmModal' }, icon('trash')),
+                ' ',
+                h('a', { href: '#', class: 'rename-action', title: 'Rename' }, icon('pencil-square'))] : null));
 }
 
 function addRow(item) {
@@ -120,6 +127,90 @@ async function deleteItem() {
         showResultMessage(error.message, false);
     }
     pendingDelete = null;
+}
+
+// ---------------------------------------------------------------------------
+// Rename (#21)
+// ---------------------------------------------------------------------------
+
+let renameDialog = null;    // {modal, title, input, error, cell}: built on first use
+
+function renameModal() {
+    if (renameDialog) return renameDialog;
+    const title = h('h5', { class: 'modal-title', id: 'renameModalLabel' });
+    const input = h('input', { type: 'text', class: 'form-control', id: 'renameName', required: true, autocomplete: 'off', spellcheck: 'false' });
+    const error = h('div', { class: 'alert alert-danger mt-3 mb-0 d-none', id: 'renameError', role: 'alert' });
+    const form = h('form', { id: 'renameForm', novalidate: true, onsubmit: renameItem },
+        h('label', { for: 'renameName', class: 'form-label' }, 'New name'), input, error);
+    const modal = h('div', { class: 'modal fade', id: 'renameModal', tabindex: '-1', 'aria-labelledby': 'renameModalLabel', 'aria-hidden': 'true' },
+        h('div', { class: 'modal-dialog' }, h('div', { class: 'modal-content' },
+            h('div', { class: 'modal-header' }, title,
+                h('button', { type: 'button', class: 'btn-close', 'data-bs-dismiss': 'modal', 'aria-label': 'Close' })),
+            h('div', { class: 'modal-body' }, form),
+            h('div', { class: 'modal-footer' },
+                h('button', { type: 'button', class: 'btn btn-secondary', 'data-bs-dismiss': 'modal' }, 'Cancel'),
+                h('button', { type: 'submit', form: 'renameForm', class: 'btn btn-primary', id: 'renameButton' }, 'Rename')))));
+    modal.addEventListener('shown.bs.modal', () => {
+        input.focus();
+        // Select the name without its extension, as file managers do
+        const dot = renameDialog.cell?.dataset.type === 'f' ? input.value.lastIndexOf('.') : -1;
+        input.setSelectionRange(0, dot > 0 ? dot : input.value.length);
+    });
+    document.body.append(modal);
+    renameDialog = { modal, title, input, error, cell: null };
+    return renameDialog;
+}
+
+function showRenameError(message) {
+    const { error } = renameModal();
+    error.textContent = message ?? '';
+    error.classList.toggle('d-none', !message);
+}
+
+function openRename(cell) {
+    const dialog = renameModal();
+    dialog.cell = cell;
+    dialog.title.textContent = cell.dataset.type === 'd' ? 'Rename folder' : 'Rename file';
+    dialog.input.value = cell.dataset.name;
+    showRenameError(null);
+    showModal(dialog.modal);
+}
+
+async function renameItem(event) {
+    event.preventDefault();
+    const { cell, input } = renameModal();
+    const name = input.value.trim();
+    if (!cell) return;
+    if (!name) {
+        showRenameError('The name cannot be empty.');
+        return;
+    }
+    if (name === cell.dataset.name) {
+        await hideModal(renameDialog.modal);
+        return;
+    }
+    const button = byId('renameButton');
+    button.disabled = true;
+    try {
+        const { item } = await api('./', { data: { a: 'rename', id: cell.dataset.id, type: cell.dataset.type, name } });
+        updateRowName(cell, item.name);
+        await hideModal(renameDialog.modal);
+    } catch (error) {
+        // The dialog stays open, to correct the name
+        showRenameError(error.message);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+/** The row of a renamed item, updated in place: name, link, actions */
+function updateRowName(cell, name) {
+    const path = encodeURIComponent(childPath(name));
+    const link = cell.closest('tr').querySelector('.filename a');
+    link.href = cell.dataset.type === 'd' ? `?p=${path}` : `dl?p=${path}`;
+    link.replaceChildren(cell.dataset.type === 'd' ? icon('folder', 'me-1') : '', name);
+    cell.dataset.name = name;
+    table.refresh();
 }
 
 // ---------------------------------------------------------------------------

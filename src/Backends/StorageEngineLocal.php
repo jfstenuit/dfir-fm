@@ -244,6 +244,33 @@ class StorageEngineLocal implements StorageEngineInterface
         return true;
     }
 
+    public function rename(string $from, string $to): bool
+    {
+        try {
+            $source = $this->validatePath($from);
+            $target = $this->validatePath($to);
+        } catch (\Exception $e) {
+            error_log("Failed to validate path in rename(): " . $e->getMessage());
+            return false;
+        }
+        $staging = $this->baseDirectory . DIRECTORY_SEPARATOR . self::STAGING_DIRECTORY;
+        if (in_array($this->baseDirectory, [$source, $target], true)
+            || str_starts_with($source . DIRECTORY_SEPARATOR, $staging . DIRECTORY_SEPARATOR)
+            || str_starts_with($target . DIRECTORY_SEPARATOR, $staging . DIRECTORY_SEPARATOR)
+            || !file_exists($source) || is_link($source) || file_exists($target) || is_link($target)) {
+            return false;
+        }
+        // A directory into itself or its own content
+        if (str_starts_with($target . DIRECTORY_SEPARATOR, $source . DIRECTORY_SEPARATOR)) {
+            return false;
+        }
+
+        // rename() would replace an existing target: the checks above run
+        // under the application database's write lock, so only a process
+        // outside the application could create the target in between
+        return @rename($source, $target);
+    }
+
     public function readStream(string $path)
     {
         $absolutePath = $this->validatePath($path);

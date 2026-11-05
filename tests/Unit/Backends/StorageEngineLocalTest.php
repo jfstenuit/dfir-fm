@@ -221,4 +221,46 @@ final class StorageEngineLocalTest extends TestCase
         $this->assertSame(['.uploads', 'file'], array_values(array_diff(scandir($this->dir), ['.', '..'])));
         $this->assertSame(['.', '..'], scandir("$this->dir/.uploads"));
     }
+
+    public function testRenameAFileAndADirectoryWithItsContent(): void
+    {
+        mkdir("$this->dir/case/disk", 0777, true);
+        file_put_contents("$this->dir/case/disk/image.E01", 'bytes');
+        $engine = new StorageEngineLocal($this->dir);
+
+        $this->assertTrue($engine->rename('/file', '/renamed'));
+        $this->assertSame([false, true], [file_exists("$this->dir/file"), is_file("$this->dir/renamed")]);
+        $this->assertTrue($engine->rename('/case', '/case-1'));
+        $this->assertSame('bytes', file_get_contents("$this->dir/case-1/disk/image.E01"));
+        $this->assertDirectoryDoesNotExist("$this->dir/case");
+    }
+
+    public function testRenameNeverReplaces(): void
+    {
+        mkdir("$this->dir/empty");
+        mkdir("$this->dir/case");
+        file_put_contents("$this->dir/other", 'kept');
+        symlink('/etc/hostname', "$this->dir/link");
+        $engine = new StorageEngineLocal($this->dir, ["$this->dir/app.sqlite"]);
+
+        $refused = [
+            'an existing file' => ['/file', '/other'],
+            'an existing empty directory' => ['/case', '/empty'],
+            'a link' => ['/file', '/link'],
+            'a missing source' => ['/nope', '/new'],
+            'a link as source' => ['/link', '/new'],
+            'the root' => ['/', '/new'],
+            'into itself' => ['/case', '/case/sub'],
+            'the staging area' => ['/.uploads', '/new'],
+            'into the staging area' => ['/file', '/.uploads/x'],
+            'a reserved path' => ['/file', '/app.sqlite-wal'],
+            'traversal' => ['/file', '/../outside'],
+        ];
+        $engine->healthCheck(); // creates the staging area
+        foreach ($refused as $case => [$from, $to]) {
+            $this->assertFalse(@$engine->rename($from, $to), $case);
+        }
+        $this->assertSame('kept', file_get_contents("$this->dir/other"));
+        $this->assertSame(['.uploads', 'case', 'empty', 'file', 'link', 'other'], array_values(array_diff(scandir($this->dir), ['.', '..'])));
+    }
 }

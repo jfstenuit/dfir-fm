@@ -134,12 +134,12 @@ class FileManagerView
           </td>
           <td class="checksum" title="<?php echo $e($i['sha256']); ?>"><?php echo $e($i['sha256']); ?></td>
           <td class="inline-actions text-center" data-id="<?php echo $e($i['id']); ?>" data-type="<?php echo $e($i['type']); ?>" data-name="<?php echo $e($i['name']); ?>">
-              <?php if ($canDelete) : ?>
+              <?php if ($canDelete) : /* rename needs the same right (#21) */ ?>
               <a href="#" class="delete-action" title="Delete" data-bs-toggle="modal" data-bs-target="#deleteConfirmModal">
                   <i class="bi bi-trash" aria-hidden="true"></i>
               </a>
+              <a href="#" class="rename-action" title="Rename"><i class="bi bi-pencil-square" aria-hidden="true"></i></a>
               <?php endif; ?>
-              <a title="Rename" href="#"><i class="bi bi-pencil-square" aria-hidden="true"></i></a>
           </td>
         </tr>
 <?php } ?>

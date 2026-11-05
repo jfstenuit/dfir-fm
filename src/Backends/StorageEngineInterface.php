@@ -29,6 +29,13 @@ interface StorageEngineInterface
     public function remove(string $path): bool;
 
     /**
+     * Rename a file, or a directory with everything under it. Never
+     * replaces an existing element: returns false if $to exists, if $from
+     * doesn't, or if either path is refused (reserved, invalid).
+     */
+    public function rename(string $from, string $to): bool;
+
+    /**
      * Open a storage element for reading.
      *
      * @param string $path The path or key of the storage element.

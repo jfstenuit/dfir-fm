@@ -203,15 +203,36 @@ final class RefreshJobs
      */
     private function replaceAbandoned(array $directory): void
     {
-        $stmt = $this->db->prepare("SELECT j.*, :path AS directory_path FROM refresh_jobs j WHERE directory_id = :dir AND status = 'in_progress'");
-        $stmt->execute([':dir' => $directory['id'], ':path' => $directory['path']]);
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $job) {
+        $this->releaseDirectory($directory, false, 'A refresh of this folder is already running.', 'Replaced by a new refresh');
+    }
+
+    /**
+     * Before something changes the names in a directory (a new refresh, a
+     * rename): a refresh running there refuses it, and one that was left
+     * (no activity for STALLED_AFTER seconds) expires. Call it in a
+     * transaction.
+     *
+     * @param array{id:int|string, path:string} $directory
+     * @param bool $withSubfolders the refreshes of its subfolders, at any depth, too
+     * @throws RefreshException 409 RefreshRunning
+     */
+    public function releaseDirectory(array $directory, bool $withSubfolders, string $refusal, string $cause): void
+    {
+        $prefix = rtrim($directory['path'], '/') . '/';
+        $stmt = $this->db->prepare("SELECT j.*, d.path AS directory_path FROM refresh_jobs j JOIN directories d ON d.id = j.directory_id
+                                    WHERE j.status = 'in_progress'
+                                      AND (d.id = :dir OR (:tree AND substr(d.path, 1, length(:prefix)) = :prefix))");
+        $stmt->execute([':dir' => $directory['id'], ':tree' => (int)$withSubfolders, ':prefix' => $prefix]);
+        $jobs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($jobs as $job) {
             if (!$this->stalled($job)) {
-                throw new RefreshException(409, 'RefreshRunning', 'A refresh of this folder is already running.', ['refresh_id' => (int)$job['id']]);
+                throw new RefreshException(409, 'RefreshRunning', $refusal, ['refresh_id' => (int)$job['id']]);
             }
+        }
+        foreach ($jobs as $job) {
             $this->end($job, 'expired');
-            $this->logger->log('directory_refresh_expired', ['refresh_id' => (int)$job['id'], 'directory' => $directory['path'],
-                                                             'last_update' => $job['last_update'], 'cause' => 'Replaced by a new refresh']);
+            $this->logger->log('directory_refresh_expired', ['refresh_id' => (int)$job['id'], 'directory' => $job['directory_path'],
+                                                             'last_update' => $job['last_update'], 'cause' => $cause]);
         }
     }
 

@@ -8,7 +8,6 @@
             "Backends\\": "src/Backends/",
             "Core\\": "src/Core/",
             "Controllers\\": "src/Controllers/",
-            "Models\\": "src/Models/",
             "Middleware\\": "src/Middleware/",
             "Services\\": "src/Services/",
             "Views\\": "src/Views/"

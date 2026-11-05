@@ -8,8 +8,11 @@ use Core\Request;
 use Core\Response;
 use Core\App;
 use Middleware\AccessMiddleware;
+use Backends\LogWriteException;
 use Backends\StorageEngineFactory;
+use Services\ItemRename;
 use Services\NameRules;
+use Services\RenameException;
 use Views\FileManagerView;
 
 use PDO;
@@ -27,6 +30,8 @@ class FileManagerController
                 self::createDirectory($config, $db);
             } elseif ($action === 'deleteItem') {
                 self::deleteItem($config, $db);
+            } elseif ($action === 'rename') {
+                self::renameItem($config, $db);
             } elseif (in_array($action, RefreshController::ACTIONS, true)) {
                 RefreshController::handle($config, $db, $action);
             } else {
@@ -157,6 +162,34 @@ class FileManagerController
             App::getLogger()->log('file_deleted', ['file'=>$path]);
 
             echo json_encode(['success' => true, 'message' => 'File deleted successfully']);
+        }
+    }
+
+    /**
+     * Rename a file or a folder (#21): id, type ('f' or 'd'), name. The
+     * rules are in Services\ItemRename. JSON: {"success":true,"item":…}, or
+     * a 4xx/5xx status and {"success":false,"code":…,"message":…}.
+     */
+    public static function renameItem($config, $db) {
+        header('Content-Type: application/json');
+        try {
+            $storage = StorageEngineFactory::create($config);
+            if (!$storage->healthCheck()) {
+                error_log("Failed to get a handle on a Storage Engine");
+                throw new RenameException(500, 'StorageError', 'The storage is unavailable.');
+            }
+            $rename = new ItemRename($db, $storage, App::getLogger(), $config);
+            $item = $rename->rename((int)$_SESSION['user_id'], $_POST['type'] ?? null, $_POST['id'] ?? null, $_POST['name'] ?? null);
+            echo json_encode(['success' => true, 'item' => $item]);
+        } catch (RenameException $e) {
+            http_response_code($e->httpStatus);
+            echo json_encode(['success' => false, 'code' => $e->errorCode, 'message' => $e->getMessage()] + $e->details);
+        } catch (LogWriteException $e) {
+            throw $e; // the 503 of index.php (D29)
+        } catch (\Throwable $e) {
+            error_log('Rename error: ' . $e);
+            http_response_code(500);
+            echo json_encode(['success' => false, 'code' => 'InternalError', 'message' => 'Internal error.']);
         }
     }
 
