@@ -109,6 +109,43 @@ final class HttpBehaviourTest extends FeatureTestCase
         $this->assertSame([], $this->server->logEntries('login_password_success'), 'nothing got through');
     }
 
+    /** Some oidc_* keys but not all: refuse to run rather than run without the sign-in (#9) */
+    public function testPartialOidcConfigurationStopsTheApplication(): void
+    {
+        $this->restartWith(['oidc_issuer' => 'https://idp.example.com/', 'oidc_client_secret' => 'S3cr3t-value']);
+        $client = $this->client();
+
+        $page = $client->get('login');
+        $this->assertSame(503, $page->status);
+        $this->assertStringContainsString('OIDC sign-in configuration', $page->body);
+        $this->assertStringNotContainsString('oidc_client_id', $page->body, 'the details are in the log only');
+        $this->assertSecurityHeaders($page, '503 page');
+
+        $json = $client->post('login', ['username' => TestServer::BOB, 'password' => TestServer::BOB_PASSWORD]);
+        $this->assertSame(503, $json->status);
+        $this->assertSame('oidc_misconfigured', $json->json()['code'] ?? null);
+
+        $log = $this->server->serverLog();
+        $this->assertStringContainsString('DFIR FM configuration error: OIDC partially configured, missing oidc_client_id, oidc_redirect_uri', $log);
+        $this->assertStringNotContainsString('S3cr3t-value', $log);
+        $this->assertSame([], $this->server->logEntries('login_password_success'), 'nothing got through');
+    }
+
+    public function testInvalidOidcConfigurationStopsTheApplication(): void
+    {
+        $this->restartWith([
+            'oidc_issuer' => 'https://login.microsoftonline.com/common/v2.0',
+            'oidc_client_id' => 'dfir-fm',
+            'oidc_client_secret' => 'S3cr3t-value',
+            'oidc_redirect_uri' => 'https://fm.example.com/login/oidc/callback',
+            'oidc_email_domain' => 'example.com',
+            'oidc_admin_claim' => 'roles',
+            'oidc_admin_value' => 'Admin',
+        ]);
+        $this->assertSame(503, $this->client()->get('login')->status);
+        $this->assertStringContainsString('DFIR FM configuration error: OIDC oidc_issuer is a multi-tenant endpoint', $this->server->serverLog());
+    }
+
     public function testUnreadableEnvStopsTheApplication(): void
     {
         if (function_exists('posix_geteuid') && posix_geteuid() === 0) {

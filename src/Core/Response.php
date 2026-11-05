@@ -61,6 +61,15 @@ class Response
         self::triggerUnavailable('apcu_unavailable', "The application can't run: it needs APCu for login rate limiting, and $problem");
     }
 
+    /**
+     * The oidc_* settings are partial or invalid (#9): the application
+     * refuses to run. The reason is in the PHP error log only.
+     */
+    public static function triggerOidcMisconfigured()
+    {
+        self::triggerUnavailable('oidc_misconfigured', "The application can't run: its OIDC sign-in configuration is incomplete or invalid. The operator must fix the oidc_* settings (see the web server error log).");
+    }
+
     /** 503: JSON for API calls (POST), a page otherwise */
     private static function triggerUnavailable(string $code, string $message)
     {

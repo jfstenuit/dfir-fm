@@ -113,7 +113,14 @@ project-root/
 │   │   ├── RenameException.php
 │   │   ├── NameRules.php      # File and folder name rules
 │   │   ├── EventLog.php       # Events database: search, export, archive, purge
-│   │   └── EventImport.php    # Import of older log files
+│   │   ├── EventImport.php    # Import of older log files
+│   │   └── Oidc/              # OIDC sign-in (#9, optional)
+│   │       ├── OidcConfig.php # The oidc_* settings: state, validation, domain match
+│   │       ├── OidcProvider.php # Discovery document and JWKS, cached in APCu
+│   │       ├── HttpsClient.php  # Interface of every IdP call (stubbed in tests)
+│   │       ├── CurlHttpsClient.php # Verified HTTPS, short timeouts, no redirects
+│   │       ├── HttpsResponse.php
+│   │       └── OidcException.php
 │   └── Views/                 # Templates for rendering HTML
 │       ├── Modals/            # Bootstrap modals
 │       │   ├── AccessRightsModal.php
@@ -156,6 +163,7 @@ project-root/
 ## Development & Debugging
 
 - Set up Apache (`mod_rewrite`, `AllowOverride` for `.htaccess`; `mod_headers` recommended) with PHP 8.4 and the extensions `pdo_sqlite`, `apcu`, `curl`, `gmp` (required by `sendgrid/sendgrid`) and `mbstring`, then `composer install`. APCu must be enabled for the web server (`apc.enabled=1`, the default): without the extension, or with it disabled, `index.php` answers every request with a `503` saying what is missing (JSON `code: apcu_unavailable` for POST requests) and writes `DFIR FM configuration error: APCu unavailable, …` to the PHP error log. The `bin/` scripts don't need it (in the CLI, `apc.enable_cli` is usually 0). Or use the Docker image (see "Docker"). Other web servers need the `.htaccess` rules translated, as `docker/lighttpd.conf` does for lighttpd.
+- OIDC sign-in (#9) is optional and off unless the `oidc_*` keys are set. It uses `firebase/php-jwt` (D11) for the JWKS and the ID-token signatures, with PHP's `openssl` extension, and a code-flow client of our own (`src/Services/Oidc/`, ext-curl). A partial or invalid `oidc_*` configuration gets the same treatment as a missing APCu: a `503` on every request (JSON `code: oidc_misconfigured`), the reason in the PHP error log as `DFIR FM configuration error: OIDC …` (never the client secret).
 - Two kinds of logs: the application's events (logins, uploads, downloads, admin actions) go to the events database and to the log engine's copy (`log_engine`, see "Logging & Forensic Integrity"); PHP errors, configuration problems and logging failures go to the PHP error log.
 - No framework or build system is used at this time.
 - JavaScript and CSS files are managed manually (see "Front end").
@@ -716,6 +724,7 @@ Each destination implements `LogDestination` (`name()`, `write(array $entry)`, w
 | Uploads | `upload_max_size`, `upload_stale_after`, `upload_max_verifications` |
 | Security | `trusted_proxies`, `force_https`, `max_login_attempts`, `max_login_attempts_per_user`, `login_lockout_duration` |
 | Sessions | `session_idle_timeout`, `session_max_lifetime`, `session_save_path` |
+| OIDC (#9, optional) | `oidc_issuer`, `oidc_client_id`, `oidc_client_secret`, `oidc_redirect_uri`, `oidc_email_domain`, `oidc_admin_claim`, `oidc_admin_value` (required, all or none); `oidc_scopes`, `oidc_email_claim`, `oidc_require_email_verified`, `oidc_require_mfa`, `oidc_max_age`, `oidc_display_name`, `oidc_remember_days` |
 | Logging | `events_database_path`, `log_engine`, `log_file_path`, `log_format`, `syslog_tag` |
 | Docker only (read by Compose, ignored by the application) | `uid`, `gid`, `http_port`, `files_dir`, `log_dir` |
 

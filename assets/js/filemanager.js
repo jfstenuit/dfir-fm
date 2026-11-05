@@ -336,7 +336,7 @@ async function removeGroup(event, button) {
 }
 
 // ---------------------------------------------------------------------------
-// Uploads (Dropzone; protocol in PLAN.md §3.4)
+// Uploads (Dropzone; protocol in DEVELOPER.md, "Upload protocol")
 // ---------------------------------------------------------------------------
 
 function initDropzone() {

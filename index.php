@@ -29,6 +29,7 @@ use Core\Request;
 use Backends\LogEngineFactory;
 use Backends\LogWriteException;
 use Middleware\SecurityMiddleware;
+use Services\Oidc\OidcConfig;
 
 // Load configuration
 $config = Config::load(ENV_FILE);
@@ -49,6 +50,14 @@ try {
 if (($apcuProblem = SecurityMiddleware::apcuProblem()) !== null) {
     error_log("DFIR FM configuration error: APCu unavailable, $apcuProblem");
     Response::triggerApcuUnavailable($apcuProblem);
+    return;
+}
+
+// OIDC sign-in (#9): off without any oidc_* key; a partial or invalid
+// configuration stops the application rather than run without it
+if (($oidcProblem = OidcConfig::fromConfig($config)->problem()) !== null) {
+    error_log("DFIR FM configuration error: OIDC $oidcProblem");
+    Response::triggerOidcMisconfigured();
     return;
 }
 

@@ -49,7 +49,7 @@ stepLogin.addEventListener('submit', async event => {
 
     nextBtn.disabled = true;
     try {
-        // login_type is always "password" for now (OIDC: PLAN.md F1)
+        // login_type is always "password" for now (OIDC: #9, PLAN.md Phase 16)
         await api('login', { data: { action: 'checkUser', email } });
         await slide(stepLogin, stepPassword, 'forward');
         password.focus();
