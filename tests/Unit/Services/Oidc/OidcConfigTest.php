@@ -118,6 +118,49 @@ final class OidcConfigTest extends TestCase
         $this->assertFalse($oidc->inDomain('alice@example.com'));
     }
 
+    public function testCaFile(): void
+    {
+        $this->assertNull(OidcConfig::fromConfig(self::COMPLETE)->caFile(), 'the system store by default');
+
+        $dir = sys_get_temp_dir() . '/dfirfm-ca-' . bin2hex(random_bytes(6));
+        mkdir($dir);
+        try {
+            $key = openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_EC, 'curve_name' => 'prime256v1']);
+            $certificate = openssl_csr_sign(openssl_csr_new(['commonName' => 'Test CA'], $key), null, $key, 1);
+            openssl_x509_export($certificate, $pem);
+            file_put_contents("$dir/ca.pem", "# comment\n$pem$pem");
+            file_put_contents("$dir/empty.pem", '');
+            file_put_contents("$dir/key.pem", openssl_pkey_get_details($key)['key']);
+            file_put_contents("$dir/broken.pem", "$pem-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n");
+            file_put_contents("$dir/unreadable.pem", $pem);
+            chmod("$dir/unreadable.pem", 0);
+
+            $oidc = OidcConfig::fromConfig(['oidc_ca_file' => "$dir/ca.pem"] + self::COMPLETE);
+            $this->assertNull($oidc->problem());
+            $this->assertSame("$dir/ca.pem", $oidc->caFile());
+
+            $cases = [
+                'relative.pem' => 'must be an absolute path',
+                "$dir/missing.pem" => 'is not a readable file',
+                $dir => 'is not a readable file',
+                "$dir/empty.pem" => 'holds no PEM certificate',
+                "$dir/key.pem" => 'holds no PEM certificate',
+                "$dir/broken.pem" => 'holds a certificate that cannot be parsed',
+            ];
+            if (!is_readable("$dir/unreadable.pem")) { // as root, it is
+                $cases["$dir/unreadable.pem"] = 'is not a readable file';
+            }
+            foreach ($cases as $path => $message) {
+                $oidc = OidcConfig::fromConfig(['oidc_ca_file' => $path] + self::COMPLETE);
+                $this->assertFalse($oidc->isEnabled(), $path);
+                $this->assertStringContainsString("oidc_ca_file $message: '$path'", (string)$oidc->problem());
+            }
+        } finally {
+            array_map('unlink', glob("$dir/*"));
+            rmdir($dir);
+        }
+    }
+
     public function testProblemNeverContainsTheSecret(): void
     {
         $oidc = OidcConfig::fromConfig(['oidc_issuer' => 'http://x', 'oidc_email_domain' => 'x'] + self::COMPLETE);

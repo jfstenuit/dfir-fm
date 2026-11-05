@@ -77,6 +77,17 @@ final class HttpBehaviourTest extends FeatureTestCase
         $this->assertSame(404, $this->bobClient()->get('no/such/route')->status);
     }
 
+    /** OIDC disabled (no oidc_* key): its routes don't exist, for anyone (#9) */
+    public function testOidcRoutesNotFoundWhenDisabled(): void
+    {
+        foreach ([$this->client(), $this->bobClient()] as $client) {
+            foreach (['login/oidc', 'login/oidc/callback?code=x&state=y'] as $path) {
+                $this->assertSame(404, $client->get($path)->status, $path);
+            }
+        }
+        $this->assertSame([], $this->server->logEntries('login_oidc_failure'));
+    }
+
     public function testInvalidTrustedProxiesStopsTheApplication(): void
     {
         $this->restartWith(['trusted_proxies' => '127.0.0.1, not-an-address']);

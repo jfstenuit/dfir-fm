@@ -63,7 +63,7 @@ if ($oidc->state() !== OidcConfig::ENABLED || $oidc->problem() !== null) {
 }
 printf("OK    Configuration: %s, client %s, domain %s\n", $oidc->issuer(), $oidc->clientId(), $oidc->emailDomain());
 
-$check = new ProviderCheck($oidc, new CurlHttpsClient());
+$check = new ProviderCheck($oidc, new CurlHttpsClient($oidc->caFile()));
 $results = $check->run();
 foreach ($results as [$status, $name, $detail]) {
     printf("%-5s %s: %s\n", $status, $name, $detail);

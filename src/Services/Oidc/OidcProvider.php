@@ -26,7 +26,7 @@ final class OidcProvider
 
     public static function create(OidcConfig $config): self
     {
-        return new self($config, new CurlHttpsClient());
+        return new self($config, new CurlHttpsClient($config->caFile()));
     }
 
     public function http(): HttpsClient

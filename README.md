@@ -153,7 +153,7 @@ Installing it is another matter: `docker compose pull` downloads the image, and 
 - **Without Docker:** run `composer install --no-dev` on a connected machine with PHP 8.4, then copy the whole directory, `vendor/` included, to the air-gapped host and continue with step 3 of [Installation without Docker](#installation-without-docker). The host still needs PHP and its extensions, from its own package mirror.
 
 ### OIDC sign-in (in progress, #9)
-The sign-in itself isn't available yet. What exists is the configuration and a check of the identity provider (IdP), to prepare it:
+The login page doesn't send anyone to the identity provider (IdP) yet. What exists is the configuration, a check of the IdP, and the sign-in itself at `https://<your site>/login/oidc`, to prepare and try it:
 
 1. **Register DFIR FM at the IdP** as a confidential client using the authorization code flow, with PKCE allowed and `client_secret_basic` authentication. The redirect URI is `https://<your site>/login/oidc/callback`, and it must be registered exactly as `oidc_redirect_uri` says.
 2. **Set the seven required `oidc_*` keys** (see `env.sample`). With only some of them set, or an invalid value, the application answers 503 and gives the reason in the PHP error log.
@@ -168,7 +168,8 @@ The sign-in itself isn't available yet. What exists is the configuration and a c
 
    Some IdPs, Authentik among them, refuse the *client* (`invalid_client`) when the client id or the redirect URI is wrong too. When the authorization request fails as well, fix those first.
 
-   Every run is logged as `cli_oidc_check`. A sign-in with a real account is checked on the login page, once the sign-in is available.
+   Every run is logged as `cli_oidc_check`.
+4. **Sign in with a real account** at `https://<your site>/login/oidc`. A refused sign-in shows "Sign-in was not permitted" with a reference: the `login_oidc_failure` entry with that `correlation_id` gives the cause. After a sign-in, the browser remembers the address in the `dfirfm_login_email` cookie (the address only; `oidc_remember_days`). Logging out of DFIR FM also logs out of the IdP when it advertises an `end_session_endpoint`; the IdP then sends the browser back to `https://<your site>/login?signed_out`, which some IdPs require registering as a post-logout redirect URI. Accounts signed in through the IdP have no password in DFIR FM, so they get no "Change Password". If the IdP's certificate comes from an internal CA, set `oidc_ca_file` to that CA's PEM file: it then replaces the system CA store for IdP calls.
 
 **Authentik:**
 - The issuer is per application, `https://<host>/application/o/<slug>/`, trailing slash included.

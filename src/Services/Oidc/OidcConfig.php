@@ -43,6 +43,7 @@ final class OidcConfig
     private ?int $maxAge = null;
     private string $displayName = 'SSO';
     private int $rememberDays = 365;
+    private ?string $caFile = null;
 
     private function __construct()
     {
@@ -103,6 +104,12 @@ final class OidcConfig
         $self->requireMfa = $self->boolean($value('oidc_require_mfa'), 'oidc_require_mfa', false);
         $self->maxAge = $self->positiveInteger($value('oidc_max_age'), 'oidc_max_age', null);
         $self->rememberDays = $self->positiveInteger($value('oidc_remember_days'), 'oidc_remember_days', 365);
+        if ($value('oidc_ca_file') !== '') {
+            $self->caFile = $value('oidc_ca_file');
+            if (($problem = self::caFileProblem($self->caFile)) !== null) {
+                $self->errors[] = "oidc_ca_file $problem: '{$self->caFile}'";
+            }
+        }
 
         return $self;
     }
@@ -215,6 +222,12 @@ final class OidcConfig
         return $this->rememberDays;
     }
 
+    /** The PEM file of the CAs trusted for the IdP's TLS instead of the system store, or null */
+    public function caFile(): ?string
+    {
+        return $this->caFile;
+    }
+
     /**
      * Whether an address belongs to oidc_email_domain: an exact,
      * case-insensitive match on the part after the last @, with a non-empty
@@ -258,6 +271,27 @@ final class OidcConfig
         return strlen($domain) <= 253
             && preg_match('/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/', $domain) === 1
             && !ctype_digit(substr($domain, strrpos($domain, '.') + 1));
+    }
+
+    /** Why the file can't serve as the IdP's CA store, or null: an absolute path, readable, with PEM certificates only */
+    private static function caFileProblem(string $path): ?string
+    {
+        if (!str_starts_with($path, '/')) {
+            return 'must be an absolute path';
+        }
+        if (!is_file($path) || !is_readable($path)) {
+            return 'is not a readable file';
+        }
+        $count = preg_match_all('/-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----/s', (string)file_get_contents($path), $certificates);
+        if ($count === 0) {
+            return 'holds no PEM certificate';
+        }
+        foreach ($certificates[0] as $pem) {
+            if (@openssl_x509_read($pem) === false) {
+                return 'holds a certificate that cannot be parsed';
+            }
+        }
+        return null;
     }
 
     private function boolean(string $setting, string $key, bool $default): bool

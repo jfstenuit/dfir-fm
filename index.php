@@ -130,8 +130,9 @@ $requestUri = '/' . trim($requestUri, '/');
 // had its password changed elsewhere ends at once, as does one past its
 // idle timeout or absolute lifetime; both are answered as an expired
 // session (the JS clients treat a redirect to login as one). A change of
-// client IP is logged, not refused.
-if ($requestUri !== '/login') {
+// client IP is logged, not refused. The login routes are open to anyone,
+// the OIDC ones included (a 404 while OIDC is disabled).
+if (!in_array($requestUri, ['/login', '/login/oidc', '/login/oidc/callback'], true)) {
     if (Session::isAuthenticated()) {
         if (($revoked = Session::revocationCause($db)) !== null) {
             App::getLogger()->log('session_revoked', ['cause' => $revoked]);
@@ -152,7 +153,8 @@ if ($requestUri !== '/login') {
     }
 }
 
-// CSRF protection, including the login form (login CSRF)
+// CSRF protection, including the login form (login CSRF). Only POSTs:
+// the OIDC callback (a GET) is protected by its state instead.
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!SecurityMiddleware::validateCsrfToken()) {
         header('Content-Type: application/json');
@@ -186,6 +188,11 @@ switch ($requestUri) {
     
     case '/login':
         Controllers\LoginController::handle($config,$db);
+        break;
+
+    case '/login/oidc':
+    case '/login/oidc/callback':
+        Controllers\OidcController::handle($config, $db, $requestUri);
         break;
 
     case '/logout':

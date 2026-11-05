@@ -15,6 +15,7 @@
 phpliteadmin*
 *.sh
 !/docker/start.sh
+!/tests/Support/fetch-mock-oidc.sh
 *.pl
 
 # Local Docker Compose overrides
@@ -31,6 +32,9 @@ Thumbs.db
 
 # Composer artifacts
 composer.phar
+
+# Test tools downloaded by tests/Support/fetch-mock-oidc.sh
+/.cache/
 
 # PHPUnit
 /.phpunit.cache/

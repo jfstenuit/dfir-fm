@@ -7,12 +7,22 @@ namespace Services\Oidc;
  * HTTPS only, with peer and host verification, short timeouts, no
  * redirects followed and a cap on the answer's size: an unreachable or
  * misbehaving IdP must not hold PHP workers or fill memory.
+ *
+ * With a CA file (oidc_ca_file), it is the only trust store: the system
+ * CAs, file and directory, are not used.
  */
 final class CurlHttpsClient implements HttpsClient
 {
     public const CONNECT_TIMEOUT = 5;
     public const TIMEOUT = 10;
     public const MAX_BODY = 1024 * 1024;
+
+    /** A CA directory that can't exist (/dev/null is a file): libcurl's default one is not read */
+    private const NO_CA_PATH = '/dev/null/no-ca-path';
+
+    public function __construct(private ?string $caFile = null)
+    {
+    }
 
     public function get(string $url, array $headers = []): HttpsResponse
     {
@@ -55,6 +65,11 @@ final class CurlHttpsClient implements HttpsClient
             CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
             CURLOPT_TIMEOUT => self::TIMEOUT,
             CURLOPT_USERAGENT => 'DFIR-FM',
+        ]);
+        if ($this->caFile !== null) {
+            curl_setopt_array($curl, [CURLOPT_CAINFO => $this->caFile, CURLOPT_CAPATH => self::NO_CA_PATH]);
+        }
+        curl_setopt_array($curl, [
             CURLOPT_HEADERFUNCTION => function ($curl, string $header) use (&$location): int {
                 if (stripos($header, 'Location:') === 0) {
                     $location = trim(substr($header, strlen('Location:')));

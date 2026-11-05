@@ -33,6 +33,12 @@ h2 {
     cursor: pointer;
     margin-top: 0.5em;
 }
+a.btn {
+    display: block;
+    text-align: center;
+    text-decoration: none;
+    box-sizing: border-box;
+}
 .btn:disabled {
     background: #aaa;
     cursor: not-allowed;

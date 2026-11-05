@@ -41,6 +41,17 @@ class ProfileController
 
     private static function updatePassword(PDO $db, $userId, array $request)
     {
+        // OIDC accounts sign in through the IdP only (#9): a password would
+        // be a way in that the IdP doesn't control
+        $stmt = $db->prepare("SELECT auth_source FROM users WHERE id = :id");
+        $stmt->execute([':id' => $userId]);
+        if ($stmt->fetchColumn() === 'oidc') {
+            App::getLogger()->log('password_change_refused', ['cause' => 'oidc_account']);
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => 'This account signs in through its identity provider: it has no password here.']);
+            return;
+        }
+
         // No previous password asked (D24): the session is proof enough, and an
         // invitee who set theirs through an invitation link may not remember it
         $problem = PasswordPolicy::problem($request['password'] ?? null);

@@ -162,6 +162,15 @@ class Session
         $_SESSION['session_version'] = $version;
     }
 
+    /**
+     * A session opened through the IdP (#9). OIDC accounts have no
+     * password, so they have no other way in.
+     */
+    public static function isOidc(): bool
+    {
+        return ($_SESSION['auth_method'] ?? null) === 'oidc';
+    }
+
     public static function getUserId(): ?int
     {
         return isset($_SESSION['user_id']) ? (int) $_SESSION['user_id'] : null;

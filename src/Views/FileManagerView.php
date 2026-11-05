@@ -84,9 +84,11 @@ class FileManagerView
                 <i class="bi bi-person" aria-hidden="true"></i> Account
             </a>
             <div class="dropdown-menu dropdown-menu-end" aria-labelledby="userDropdown">
+                <?php if (!\Core\Session::isOidc()): // the IdP's account has no password here (#9) ?>
                 <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#profileModal">
                 <i class="bi bi-key" aria-hidden="true"></i> Change Password
                 </a>
+                <?php endif; ?>
                 <a class="dropdown-item" href="logout">
                 <i class="bi bi-box-arrow-right" aria-hidden="true"></i> Logout
                 </a>
@@ -158,7 +160,9 @@ AccessRightsModal::render($cwd);
 if ($cwd !== '/') {
     InviteModal::render($cwd);
 }
-ProfileModal::render($cwd);
+if (!\Core\Session::isOidc()) {
+    ProfileModal::render($cwd);
+}
 if ($canRefresh) {
     RefreshModal::render($cwd);
 }
