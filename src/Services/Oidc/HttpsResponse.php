@@ -5,7 +5,8 @@ namespace Services\Oidc;
 
 final class HttpsResponse
 {
-    public function __construct(public readonly int $status, public readonly string $body)
+    /** @param ?string $location the Location header (redirects are never followed) */
+    public function __construct(public readonly int $status, public readonly string $body, public readonly ?string $location = null)
     {
     }
 

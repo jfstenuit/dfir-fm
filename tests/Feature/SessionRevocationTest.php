@@ -14,7 +14,7 @@ final class SessionRevocationTest extends FeatureTestCase
     {
         $page = $client->get('');
         $this->assertSame(302, $page->status);
-        $this->assertStringStartsWith('login?redirect=', $page->header('Location'));
+        $this->assertStringStartsWith('/login?redirect=', $page->header('Location'));
         $logged = $this->server->logEntries('session_revoked');
         $this->assertSame($cause, end($logged)['cause']);
         $this->assertSame(302, $client->get('')->status, 'the session is gone, not only refused once');

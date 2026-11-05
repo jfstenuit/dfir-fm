@@ -9,8 +9,11 @@ namespace Services\Oidc;
  */
 interface HttpsClient
 {
-    /** @throws OidcException on a transport failure (any HTTP status is returned) */
-    public function get(string $url): HttpsResponse;
+    /**
+     * @param list<string> $headers extra request headers, e.g. "Authorization: Bearer …"
+     * @throws OidcException on a transport failure (any HTTP status is returned)
+     */
+    public function get(string $url, array $headers = []): HttpsResponse;
 
     /**
      * POST an application/x-www-form-urlencoded body, with HTTP Basic

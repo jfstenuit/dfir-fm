@@ -169,22 +169,3 @@ final class OidcProviderTest extends TestCase
         ];
     }
 }
-
-final class StubHttpsClient implements HttpsClient
-{
-    /** @var array<string,HttpsResponse> */
-    public array $answers = [];
-    /** @var list<string> */
-    public array $requests = [];
-
-    public function get(string $url): HttpsResponse
-    {
-        $this->requests[] = $url;
-        return $this->answers[$url] ?? throw new OidcException("unreachable: $url");
-    }
-
-    public function postForm(string $url, array $fields, ?array $basicAuth = null): HttpsResponse
-    {
-        return $this->get($url);
-    }
-}

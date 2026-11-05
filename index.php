@@ -145,7 +145,9 @@ if ($requestUri !== '/login') {
     }
     if (!Session::isAuthenticated()) {
         $currentUrl = $_SERVER['REQUEST_URI'];
-        header('Location: login?redirect=' . urlencode($currentUrl));
+        // From the base path: a relative "login" from a nested path
+        // (/login/oidc/callback) would resolve below it, and loop
+        header('Location: ' . rtrim($scriptName, '/') . '/login?redirect=' . urlencode($currentUrl));
         exit;
     }
 }

@@ -152,6 +152,29 @@ Installing it is another matter: `docker compose pull` downloads the image, and 
   ```
 - **Without Docker:** run `composer install --no-dev` on a connected machine with PHP 8.4, then copy the whole directory, `vendor/` included, to the air-gapped host and continue with step 3 of [Installation without Docker](#installation-without-docker). The host still needs PHP and its extensions, from its own package mirror.
 
+### OIDC sign-in (in progress, #9)
+The sign-in itself isn't available yet. What exists is the configuration and a check of the identity provider (IdP), to prepare it:
+
+1. **Register DFIR FM at the IdP** as a confidential client using the authorization code flow, with PKCE allowed and `client_secret_basic` authentication. The redirect URI is `https://<your site>/login/oidc/callback`, and it must be registered exactly as `oidc_redirect_uri` says.
+2. **Set the seven required `oidc_*` keys** (see `env.sample`). With only some of them set, or an invalid value, the application answers 503 and gives the reason in the PHP error log.
+3. **Check the IdP**, as the web server user:
+   ```bash
+   sudo -u www-data php bin/oidc-check.php
+   ```
+   Each line is OK, FAIL or INFO, and the exit status is 1 if anything failed. It needs no browser, and checks:
+   - the IdP address: the discovery document (its `issuer` must equal `oidc_issuer` exactly) and the signing keys
+   - the client id and the redirect URI: an authorization request, which the IdP must answer with its login page, not an error
+   - the client secret: a made-up code is exchanged, which the IdP must refuse as a bad code, not as a bad client
+
+   Some IdPs, Authentik among them, refuse the *client* (`invalid_client`) when the client id or the redirect URI is wrong too. When the authorization request fails as well, fix those first.
+
+   Every run is logged as `cli_oidc_check`. A sign-in with a real account is checked on the login page, once the sign-in is available.
+
+**Authentik:**
+- The issuer is per application, `https://<host>/application/o/<slug>/`, trailing slash included.
+- With the default scope mappings, `groups` lists group *names* (requested through the `profile` scope): set `oidc_admin_claim=groups` and `oidc_admin_value` to the name of a group kept for DFIR FM admins, e.g. `dfir-fm-admins`. Whoever may rename groups or edit their members in Authentik controls who is a DFIR FM admin.
+- The default `email` mapping sends `email_verified: false`, which DFIR FM refuses by default. When the accounts of the domain are created by Authentik's administrators (no self-registration with an unchecked address), set `oidc_require_email_verified=false`. Otherwise, add a scope mapping that sends `email_verified: true` only for addresses that were checked.
+
 ---
 
 ## Usage

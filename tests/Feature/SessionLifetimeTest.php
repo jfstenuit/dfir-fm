@@ -15,7 +15,7 @@ final class SessionLifetimeTest extends FeatureTestCase
     {
         $page = $client->get('');
         $this->assertSame(302, $page->status);
-        $this->assertStringStartsWith('login?redirect=', $page->header('Location'));
+        $this->assertStringStartsWith('/login?redirect=', $page->header('Location'));
         $logged = $this->server->logEntries('session_expired');
         $this->assertCount(1, $logged);
         $this->assertSame($cause, $logged[0]['cause']);

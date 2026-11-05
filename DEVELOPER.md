@@ -63,7 +63,8 @@ project-root/
 │   ├── report-domain-groups.php # Groups of older invitations, to review
 │   ├── expire-uploads.php     # Expire abandoned uploads (cron)
 │   ├── archive-events.php     # Archive events to a file, purge an archive
-│   └── import-log.php         # Import log files written before the events database
+│   ├── import-log.php         # Import log files written before the events database
+│   └── oidc-check.php         # Check the OIDC provider and the client registration (#9)
 ├── .dockerignore              # Build context of the image: only what it needs
 ├── docker/                    # Container deployment (see "Docker")
 │   ├── Dockerfile             # PHP-FPM 8.4 (Alpine) + APCu + lighttpd
@@ -120,6 +121,7 @@ project-root/
 │   │       ├── HttpsClient.php  # Interface of every IdP call (stubbed in tests)
 │   │       ├── CurlHttpsClient.php # Verified HTTPS, short timeouts, no redirects
 │   │       ├── HttpsResponse.php
+│   │       ├── ProviderCheck.php # The checks of bin/oidc-check.php
 │   │       └── OidcException.php
 │   └── Views/                 # Templates for rendering HTML
 │       ├── Modals/            # Bootstrap modals

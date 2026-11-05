@@ -70,7 +70,10 @@ final class HttpBehaviourTest extends FeatureTestCase
 
     public function testUnknownRoutes(): void
     {
-        $this->assertSame(302, $this->client()->get('no/such/route')->status, 'anonymous: redirect to login');
+        $page = $this->client()->get('no/such/route?x=1');
+        $this->assertSame(302, $page->status, 'anonymous: redirect to login');
+        // From the base path: a relative one would resolve to no/such/login, and loop
+        $this->assertSame('/login?redirect=' . urlencode('/no/such/route?x=1'), $page->header('Location'));
         $this->assertSame(404, $this->bobClient()->get('no/such/route')->status);
     }
 

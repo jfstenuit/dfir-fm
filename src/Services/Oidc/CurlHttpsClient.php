@@ -14,9 +14,9 @@ final class CurlHttpsClient implements HttpsClient
     public const TIMEOUT = 10;
     public const MAX_BODY = 1024 * 1024;
 
-    public function get(string $url): HttpsResponse
+    public function get(string $url, array $headers = []): HttpsResponse
     {
-        return $this->request($url, []);
+        return $this->request($url, [CURLOPT_HTTPHEADER => array_merge(['Accept: application/json'], $headers)]);
     }
 
     public function postForm(string $url, array $fields, ?array $basicAuth = null): HttpsResponse
@@ -42,6 +42,7 @@ final class CurlHttpsClient implements HttpsClient
 
         $body = '';
         $tooLarge = false;
+        $location = null;
         $curl = curl_init($url);
         curl_setopt_array($curl, $options + [
             CURLOPT_HTTPHEADER => ['Accept: application/json'],
@@ -54,6 +55,12 @@ final class CurlHttpsClient implements HttpsClient
             CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
             CURLOPT_TIMEOUT => self::TIMEOUT,
             CURLOPT_USERAGENT => 'DFIR-FM',
+            CURLOPT_HEADERFUNCTION => function ($curl, string $header) use (&$location): int {
+                if (stripos($header, 'Location:') === 0) {
+                    $location = trim(substr($header, strlen('Location:')));
+                }
+                return strlen($header);
+            },
             CURLOPT_WRITEFUNCTION => function ($curl, string $chunk) use (&$body, &$tooLarge): int {
                 if (strlen($body) + strlen($chunk) > self::MAX_BODY) {
                     $tooLarge = true;
@@ -72,6 +79,6 @@ final class CurlHttpsClient implements HttpsClient
                 ? 'IdP answer over ' . self::MAX_BODY . " bytes: $url"
                 : "IdP request failed: $url: $error");
         }
-        return new HttpsResponse($status, $body);
+        return new HttpsResponse($status, $body, $location);
     }
 }
