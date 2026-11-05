@@ -9,7 +9,11 @@ class AccessMiddleware
     /** Start of the username of a deleted account (see deletedPseudonym()) */
     public const DELETED_PREFIX = 'deleted:';
 
-    public static function getUserInfo($db, $selector, $createIfMissing=false)
+    /**
+     * @param bool $oidc a missing account is created as an OIDC account
+     *   (#9): no password, signs in through the IdP
+     */
+    public static function getUserInfo($db, $selector, $createIfMissing=false, bool $oidc = false)
     {
         if (preg_match('/^\d+$/',$selector)) {
             $stmt = $db->prepare("SELECT * FROM users u WHERE u.id=:user_id");
@@ -24,11 +28,10 @@ class AccessMiddleware
         $ret = $stmt->fetch(PDO::FETCH_ASSOC);
 
         // If user not found and $createIfMissing is true, create a new entry
-        if (!$ret) {
-            $stmt = $db->prepare("
-                INSERT INTO users (username, password)
-                VALUES (:email, '!')
-            ");
+        if (!$ret && $createIfMissing) {
+            $stmt = $db->prepare($oidc
+                ? "INSERT INTO users (username, email, password, auth_source) VALUES (:email, :email, NULL, 'oidc')"
+                : "INSERT INTO users (username, password) VALUES (:email, '!')");
             $stmt->bindParam(':email', $selector, PDO::PARAM_STR);
             $stmt->execute();
             $userId = $db->lastInsertId();
@@ -213,6 +216,25 @@ class AccessMiddleware
      * optionally excluding one user. Used to prevent removing the last
      * usable admin.
      */
+    /**
+     * Active local administrators outside the OIDC domain (D35): the
+     * break-glass accounts, which sign in with a password whatever the IdP
+     * does. Their usernames.
+     * @return list<string>
+     */
+    public static function breakGlassAdmins($db, \Services\Oidc\OidcConfig $oidc): array
+    {
+        $stmt = $db->query("
+            SELECT DISTINCT u.username
+            FROM users u
+            JOIN user_group ug ON ug.user_id = u.id
+            JOIN groups g ON g.id = ug.group_id
+            WHERE g.is_admin = 1 AND u.auth_source = 'password' AND u.password IS NOT NULL AND u.password <> '!'
+              AND u.locked_at IS NULL AND u.deleted_at IS NULL
+        ");
+        return array_values(array_filter($stmt->fetchAll(PDO::FETCH_COLUMN), fn($username) => !$oidc->inDomain($username)));
+    }
+
     public static function countActiveAdmins($db, ?int $excludeUserId = null): int
     {
         $stmt = $db->prepare("

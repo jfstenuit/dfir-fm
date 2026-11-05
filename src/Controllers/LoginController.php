@@ -102,6 +102,12 @@ class LoginController
         LoginView::render($redirect, $oidc->displayName());
     }
 
+    /** users.last_login_at (UTC), shown on the admin page; OIDC sign-ins set it in AccountResolver */
+    private static function recordLogin(PDO $db, int $userId): void
+    {
+        $db->prepare("UPDATE users SET last_login_at = :now WHERE id = :id")->execute([':now' => gmdate('Y-m-d H:i:s'), ':id' => $userId]);
+    }
+
     /** Password sign-in refused for an address of oidc_email_domain or an OIDC account (#9) */
     private static function refusesPassword(string $username, ?array $user): ?string
     {
@@ -230,6 +236,7 @@ class LoginController
         $user['session_version'] = (int)$user['session_version'] + 1;
 
         Session::authenticate($user);
+        self::recordLogin($db, (int)$user['user_id']);
         App::getLogger()->log('password_changed', ['via' => 'invitation']);
         App::getLogger()->log('login_token_success', []);
 
@@ -366,6 +373,7 @@ class LoginController
             // guesses on other accounts.
             SecurityMiddleware::clearThrottle($userKey);
             Session::authenticate($user);
+            self::recordLogin($db, (int)$user['user_id']);
 
             App::getLogger()->log('login_password_success', []);
 

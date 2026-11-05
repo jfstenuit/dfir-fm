@@ -356,6 +356,19 @@ final class OidcLoginTest extends FeatureTestCase
         $this->assertSame([], $this->server->logEntries('logout_oidc'));
     }
 
+    /** D35: only an OIDC admin can see it, as a local admin outside the domain is the break-glass account */
+    public function testNoBreakGlassWarning(): void
+    {
+        $client = $this->client();
+        $this->signIn($client, 'sub-carol', self::claims(self::CAROL, admin: true));
+        $this->assertStringNotContainsString('breakGlassWarning', $client->get('admin')->body, 'admin@test.local');
+
+        $this->server->db()->exec("UPDATE users SET locked_at = CURRENT_TIMESTAMP WHERE username = '" . \Tests\Support\TestServer::ADMIN . "'");
+        $page = $client->get('admin')->body;
+        $this->assertStringContainsString('id="breakGlassWarning"', $page);
+        $this->assertStringContainsString('No local administrator outside the SSO domain', $page);
+    }
+
     public function testThrottled(): void
     {
         $this->restartWith($this->idp->env(['max_login_attempts' => '2']));

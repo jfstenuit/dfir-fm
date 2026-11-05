@@ -12,8 +12,13 @@ use Views\Modals\ArchiveModal;
 
 class AdminView
 {
-    public static function render($users, $groups, $accessRights, bool $proxyWarning = false)
+    /**
+     * @param ?string $ssoName oidc_display_name, null while OIDC is disabled
+     * @param bool $noBreakGlass OIDC is enabled and no active local admin outside its domain exists (D35)
+     */
+    public static function render($users, $groups, $accessRights, bool $proxyWarning = false, ?string $ssoName = null, bool $noBreakGlass = false)
     {
+        $e = fn(string $value) => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
         ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -84,12 +89,23 @@ class AdminView
       </div>
 <?php endif; ?>
       <div class="tab-pane fade show active" id="usersTab">
+<?php if ($noBreakGlass): ?>
+        <div id="breakGlassWarning" class="alert alert-warning" role="alert">
+          <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+          <strong>No local administrator outside the <?= $e($ssoName) ?> domain.</strong>
+          Every administrator signs in through <?= $e($ssoName) ?>: if it is down or misconfigured, nobody can administer
+          DFIR FM. Create a break-glass administrator with an address outside the domain:
+          <code>php bin/create-admin.php &lt;address&gt;</code> on the server.
+        </div>
+<?php endif; ?>
         <!-- Users Table -->
-        <table id="usersTable" class="table table-bordered table-striped table-hover table-sm">
+        <table id="usersTable" class="table table-bordered table-striped table-hover table-sm"<?= $ssoName !== null ? ' data-sso="' . $e($ssoName) . '"' : '' ?>>
           <thead class="table-light">
             <tr>
               <th>User</th>
               <th>Groups</th>
+              <th class="sign-in">Sign-in</th>
+              <th class="last-login">Last login</th>
               <th class="status">Status</th>
               <th class="actions">Actions</th>
             </tr>

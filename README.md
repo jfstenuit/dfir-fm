@@ -204,6 +204,7 @@ With OIDC configured, every address of `oidc_email_domain` signs in through the 
    - Contributors are invited into a case folder (never the root) and join that folder's default group, `<folder> contributors`, which gets upload-only access when created. The invitation link is single-use, valid one hour, and asks the contributor to choose a password (at least 12 characters).
    - Links are sent by mail (local sendmail, SMTP or SendGrid) or, with `mail_engine=none`, shown to the administrator to pass on.
    - "Resend invitation" (Users tab) sends a new link, which also serves as a password reset; Lock / Unlock / Delete manage the account.
+   - With OIDC, an address of the domain gets no link: its account is created without a password, and the e-mail tells the user to sign in with the IdP. Its admin rights come from the IdP's admin claim and can't be changed in DFIR FM.
 
 ### Example Workflow
 1. **Open a Case and Invite Contributors:**

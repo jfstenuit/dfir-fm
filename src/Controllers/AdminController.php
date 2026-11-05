@@ -12,6 +12,8 @@ use Core\Config;
 use Core\EventStore;
 use Backends\MailEngineFactory;
 use Views\InvitationView;
+use Views\SsoNoticeView;
+use Services\Oidc\OidcConfig;
 use Views\AdminView;
 use Services\EventLog;
 use PDO;
@@ -82,7 +84,10 @@ class AdminController
         } else {
             // Render the admin view
             $users=[]; $groups=[]; $accessRights=[];
-            AdminView::render($users, $groups, $accessRights, SecurityMiddleware::proxyWarningActive());
+            $oidc = OidcConfig::fromConfig($config);
+            AdminView::render($users, $groups, $accessRights, SecurityMiddleware::proxyWarningActive(),
+                $oidc->isEnabled() ? $oidc->displayName() : null,
+                $oidc->isEnabled() && AccessMiddleware::breakGlassAdmins($db, $oidc) === []);
         }
     }
 
@@ -114,7 +119,8 @@ class AdminController
 
         $db->exec('BEGIN IMMEDIATE');
         try {
-            $invitee = AccessMiddleware::getUserInfo($db, $email, true);
+            // An address of the OIDC domain signs in through the IdP (#9): no password, no token
+            $invitee = AccessMiddleware::getUserInfo($db, $email, true, OidcConfig::fromConfig($config)->inDomain($email));
             $group = null;
             if ($joinDefaultGroup) {
                 $group = AccessMiddleware::defaultGroupFor($db, $cwd);
@@ -130,13 +136,14 @@ class AdminController
             App::getLogger()->log('group_created', ['group' => $group['name'], 'default_group_of' => $cwd]);
         }
 
-        $delivery = self::deliverInvitation($config, $db, $email, $cwd);
+        $delivery = self::deliverInvitation($config, $db, $email, $cwd, self::signsInWithOidc($config, $invitee));
         App::getLogger()->log('user_invited', [
             'invited_user' => $email,
             'directory' => $cwd,
             'group' => $group['name'] ?? null,
             'delivery' => $delivery['delivery'],
             'invitation_sent' => $delivery['error'] === null,
+            'sso' => $delivery['sso'],
         ]);
         $done = $group !== null ? "The account was created or found and added to the group \"{$group['name']}\"" : 'The account was created or found, without any group';
         self::answerDelivery($delivery, 'Invitation sent',
@@ -148,11 +155,24 @@ class AdminController
      * Issue a new token for the account and deliver the link to $directory:
      * by mail, or, with mail_engine=none, back to the administrator
      * (answerDelivery). The link is never logged.
-     * @return array{delivery: 'mail'|'manual', link: ?string, error: ?string}
+     * An account that signs in through the IdP ($sso) gets no token: a
+     * notice with the application's URL instead (SsoNoticeView), and
+     * nothing to hand over with mail_engine=none.
+     * @return array{delivery: 'mail'|'manual', link: ?string, error: ?string, sso: bool}
      */
-    private static function deliverInvitation($config, PDO $db, string $email, string $directory): array
+    private static function deliverInvitation($config, PDO $db, string $email, string $directory, bool $sso = false): array
     {
         $manual = MailEngineFactory::isManual($config);
+        if ($sso) {
+            if ($manual) {
+                return ['delivery' => 'manual', 'link' => null, 'error' => null, 'sso' => true];
+            }
+            $ssoName = OidcConfig::fromConfig($config)->displayName();
+            $baseUrl = Request::getBaseUrl();
+            return self::sendMail($config, $email, SsoNoticeView::subject($directory, $baseUrl),
+                fn() => SsoNoticeView::render($email, $directory, $baseUrl, $ssoName)) + ['sso' => true];
+        }
+
         $token = AccessMiddleware::generateTokenForUser($db, $email);
         if (!$token) {
             // The callers checked that the account exists
@@ -161,16 +181,22 @@ class AdminController
 
         $baseUrl = Request::getBaseUrl();
         if ($manual) {
-            return ['delivery' => 'manual', 'link' => InvitationView::link($email, $token, $directory, $baseUrl), 'error' => null];
+            return ['delivery' => 'manual', 'link' => InvitationView::link($email, $token, $directory, $baseUrl), 'error' => null, 'sso' => false];
         }
 
+        // As generateTokenForUser() sets it, give or take a second; shown to the minute
+        $expiresAt = gmdate('Y-m-d H:i', time() + 3600);
+        return self::sendMail($config, $email, InvitationView::subject($directory, $baseUrl),
+            fn() => InvitationView::render($email, $token, $directory, $baseUrl, $expiresAt)) + ['sso' => false];
+    }
+
+    /** @return array{delivery: 'mail', link: null, error: ?string} */
+    private static function sendMail($config, string $email, string $subject, callable $body): array
+    {
         $error = null;
         try {
             $mailEngine = MailEngineFactory::create($config);
-            // As generateTokenForUser() sets it, give or take a second; shown to the minute
-            $expiresAt = gmdate('Y-m-d H:i', time() + 3600);
-            $body = InvitationView::render($email, $token, $directory, $baseUrl, $expiresAt);
-            if (!$mailEngine->send($email, InvitationView::subject($directory, $baseUrl), $body)) {
+            if (!$mailEngine->send($email, $subject, $body())) {
                 $error = $mailEngine->lastError() ?? 'unknown error';
             }
         } catch (\Exception $e) {
@@ -187,11 +213,20 @@ class AdminController
         return ['delivery' => 'mail', 'link' => null, 'error' => $error];
     }
 
+    /** Whether the account signs in through the IdP: linked, or of the OIDC domain (#9) */
+    private static function signsInWithOidc($config, array $user): bool
+    {
+        return $user['auth_source'] === 'oidc' || OidcConfig::fromConfig($config)->inDomain($user['username']);
+    }
+
     /** The JSON answer for a delivery; a manual link is shown once and never cached */
     private static function answerDelivery(array $delivery, string $sent, string $mailFailed): void
     {
         if ($delivery['error'] !== null) {
             echo json_encode(['success' => false, 'message' => $mailFailed]);
+        } elseif ($delivery['delivery'] === 'manual' && $delivery['sso']) {
+            echo json_encode(['success' => true, 'message' => 'This account signs in through '
+                . OidcConfig::fromConfig(App::getConfig())->displayName() . ': no link to pass on (mail_engine=none), tell the user to sign in with it.']);
         } elseif ($delivery['delivery'] === 'manual') {
             header('Cache-Control: no-store');
             echo json_encode(['success' => true, 'message' => 'Invitation link created', 'link' => $delivery['link'],
@@ -454,7 +489,8 @@ class AdminController
     {
         header('Content-Type: application/json');
 
-        $stmt = $db->query("SELECT id, username, `password`, auth_source, invitation_token, token_expiry, locked_at FROM users WHERE deleted_at IS NULL");
+        $stmt = $db->query("SELECT id, username, `password`, auth_source, display_name, last_login_at, invitation_token, token_expiry, locked_at FROM users WHERE deleted_at IS NULL");
+        $oidc = OidcConfig::fromConfig($config);
         $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $result = [];
@@ -462,13 +498,15 @@ class AdminController
         foreach ($users as $user) {
             $identifier = $user['username'];
 
-            // locked: by an administrator; active: has a password, or signs
-            // in through the IdP; invited: no password yet, with a pending
-            // link or an expired one
+            // locked: by an administrator; active: has a password, or has
+            // signed in through the IdP; invited: no password yet (a pending
+            // link or an expired one), or not signed in through the IdP yet
             $pending = !empty($user['invitation_token']) && !empty($user['token_expiry']) && strtotime($user['token_expiry']) > time();
+            // sso: signs in through the IdP, linked or of the domain (#9)
+            $sso = $user['auth_source'] === 'oidc' || $oidc->inDomain($identifier);
             if ($user['locked_at'] !== null) {
                 $status = 'locked';
-            } elseif ($user['auth_source'] === 'oidc' || (!empty($user['password']) && $user['password'] !== '!')) {
+            } elseif ($user['auth_source'] === 'oidc' ? $user['last_login_at'] !== null : (!empty($user['password']) && $user['password'] !== '!')) {
                 $status = 'active';
             } else {
                 $status = 'invited';
@@ -476,19 +514,25 @@ class AdminController
 
             // Get group memberships
             $stmtGroups = $db->prepare("
-                SELECT g.name
+                SELECT g.name, g.is_admin
                 FROM groups g
                 JOIN user_group ug ON g.id = ug.group_id
                 WHERE ug.user_id = :user_id
             ");
             $stmtGroups->execute([':user_id' => $user['id']]);
-            $groups = $stmtGroups->fetchAll(PDO::FETCH_COLUMN);
+            $groups = $stmtGroups->fetchAll(PDO::FETCH_ASSOC);
 
             $result[] = [
                 'email' => $identifier,
                 'status' => $status,
                 'invitation_pending' => $pending,
-                'groups' => $groups
+                'groups' => array_column($groups, 'name'),
+                'sso' => $sso,
+                // The IdP's admin claim decides these, at every login (D12)
+                'managed_groups' => $user['auth_source'] === 'oidc'
+                    ? array_column(array_filter($groups, fn($g) => (int)$g['is_admin'] === 1), 'name') : [],
+                'display_name' => $user['display_name'],
+                'last_login_at' => $user['last_login_at'],
             ];
         }
 
@@ -555,7 +599,7 @@ class AdminController
         }
     
         // Lookup user by email or username
-        $stmt = $db->prepare("SELECT id FROM users WHERE (email = :email OR username = :email) AND deleted_at IS NULL");
+        $stmt = $db->prepare("SELECT id, auth_source FROM users WHERE (email = :email OR username = :email) AND deleted_at IS NULL");
         $stmt->execute([':email' => $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -567,9 +611,14 @@ class AdminController
         $userId = $user['id'];
     
         // Create group if it doesn't exist
-        $stmt = $db->prepare("SELECT id FROM groups WHERE name = :name");
+        $stmt = $db->prepare("SELECT id, is_admin FROM groups WHERE name = :name");
         $stmt->execute([':name' => $groupName]);
         $group = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($group && $group['is_admin'] && $user['auth_source'] === 'oidc') {
+            self::refuseManagedAdmin($config, $email, $groupName);
+            return;
+        }
     
         if (!$group) {
             $stmt = $db->prepare("INSERT INTO groups (name) VALUES (:name)");
@@ -613,7 +662,7 @@ class AdminController
         }
     
         // Lookup user
-        $stmt = $db->prepare("SELECT id FROM users WHERE username = :email");
+        $stmt = $db->prepare("SELECT id, auth_source FROM users WHERE username = :email");
         $stmt->execute([':email' => $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -629,6 +678,11 @@ class AdminController
 
         if (!$group) {
             echo json_encode(['success' => false, 'message' => 'Group not found.']);
+            return;
+        }
+
+        if ($group['is_admin'] && $user['auth_source'] === 'oidc') {
+            self::refuseManagedAdmin($config, $email, $groupName);
             return;
         }
 
@@ -650,6 +704,18 @@ class AdminController
         } else {
             echo json_encode(['success' => false, 'message' => 'Failed to remove user from group.']);
         }
+    }
+
+    /**
+     * The admin membership of an OIDC account follows the IdP's admin
+     * claim at every login (D12): a change here would be undone then
+     */
+    private static function refuseManagedAdmin($config, string $email, string $group): void
+    {
+        $name = OidcConfig::fromConfig($config)->displayName();
+        App::getLogger()->log('group_change_refused', ['group' => $group, 'target_user' => $email, 'cause' => 'oidc_managed']);
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => "The administrator rights of this account are managed by $name: change its groups there."]);
     }
 
     private static function lockUser($config, PDO $db)
@@ -734,7 +800,7 @@ class AdminController
         header('Content-Type: application/json');
         $email = trim(is_string($_POST['email'] ?? null) ? $_POST['email'] : '');
 
-        $stmt = $db->prepare("SELECT id, locked_at FROM users WHERE username = :u AND deleted_at IS NULL");
+        $stmt = $db->prepare("SELECT id, username, auth_source, locked_at FROM users WHERE username = :u AND deleted_at IS NULL");
         $stmt->execute([':u' => $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$user) {
@@ -746,13 +812,23 @@ class AdminController
             return;
         }
 
-        $db->prepare("UPDATE users SET session_version = session_version + 1 WHERE id = :id")->execute([':id' => $user['id']]);
-        $delivery = self::deliverInvitation($config, $db, $email, '/');
+        // Through the IdP: the notice again, no password to reset, sessions kept
+        $sso = self::signsInWithOidc($config, $user);
+        if (!$sso) {
+            $db->prepare("UPDATE users SET session_version = session_version + 1 WHERE id = :id")->execute([':id' => $user['id']]);
+        }
+        $delivery = self::deliverInvitation($config, $db, $email, '/', $sso);
         App::getLogger()->log('invitation_resent', [
             'target_user' => $email,
             'delivery' => $delivery['delivery'],
             'invitation_sent' => $delivery['error'] === null,
+            'sso' => $sso,
         ]);
+        if ($sso && $delivery['error'] !== null) {
+            echo json_encode(['success' => false, 'message' => 'The notice e-mail could not be sent (details in the application log, mail_send_failure). '
+                . 'Check the mail configuration with bin/send-test-mail.php, then resend.']);
+            return;
+        }
         self::answerDelivery($delivery, 'Invitation resent',
             'The invitation e-mail could not be sent (details in the application log, mail_send_failure). The previous link '
             . 'no longer works and the open sessions of the account have ended. Check the mail configuration with '

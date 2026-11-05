@@ -15,8 +15,9 @@ final class OidcAccountSchemaTest extends FeatureTestCase
     private function addOidcAccount(bool $admin): int
     {
         $db = $this->server->db();
-        $db->prepare("INSERT INTO users (username, email, password, auth_source, oidc_issuer, oidc_subject)
-                      VALUES (:u, :u, NULL, 'oidc', 'https://idp.example.com/', 'sub-carol')")->execute([':u' => self::OIDC_USER]);
+        // As after a first sign-in (last_login_at: listed as active, not invited)
+        $db->prepare("INSERT INTO users (username, email, password, auth_source, oidc_issuer, oidc_subject, last_login_at)
+                      VALUES (:u, :u, NULL, 'oidc', 'https://idp.example.com/', 'sub-carol', '2026-11-05 10:00:00')")->execute([':u' => self::OIDC_USER]);
         $id = (int)$db->lastInsertId();
         if ($admin) {
             $db->exec("INSERT INTO user_group (user_id, group_id) SELECT $id, id FROM groups WHERE is_admin = 1");
